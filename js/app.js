@@ -7,8 +7,8 @@
 const [
   Map, SceneView, GraphicsLayer, FeatureLayer, SceneLayer, Graphic,
   Point, Polyline, Polygon,
-  PointSymbol3D, IconSymbol3DLayer,
-  LineSymbol3D, LineSymbol3DLayer,
+  PointSymbol3D, IconSymbol3DLayer, ObjectSymbol3DLayer,
+  LineSymbol3D, LineSymbol3DLayer, PathSymbol3DLayer,
   PolygonSymbol3D, FillSymbol3DLayer,
   SimpleRenderer, UniqueValueRenderer,
   SimpleLineSymbol, SimpleMarkerSymbol,
@@ -25,8 +25,10 @@ const [
   "@arcgis/core/geometry/Polygon.js",
   "@arcgis/core/symbols/PointSymbol3D.js",
   "@arcgis/core/symbols/IconSymbol3DLayer.js",
+  "@arcgis/core/symbols/ObjectSymbol3DLayer.js",
   "@arcgis/core/symbols/LineSymbol3D.js",
   "@arcgis/core/symbols/LineSymbol3DLayer.js",
+  "@arcgis/core/symbols/PathSymbol3DLayer.js",
   "@arcgis/core/symbols/PolygonSymbol3D.js",
   "@arcgis/core/symbols/FillSymbol3DLayer.js",
   "@arcgis/core/renderers/SimpleRenderer.js",
@@ -85,8 +87,8 @@ const cableLayer = new FeatureLayer({
   title: "Submarine Cables",
   renderer: new SimpleRenderer({
     symbol: new SimpleLineSymbol({
-      color: [0, 229, 255, 0.4],
-      width: 1.2,
+      color: [0, 220, 255, 0.5],
+      width: 1.5,
       style: "solid"
     })
   }),
@@ -98,10 +100,15 @@ const cableTerminalLayer = new FeatureLayer({
   url: CONFIG.CABLES_URL + "/1",
   title: "Cable Terminals",
   renderer: new SimpleRenderer({
-    symbol: new SimpleMarkerSymbol({
-      color: [0, 229, 255, 0.7],
-      size: 4,
-      outline: { color: [0, 229, 255, 0.3], width: 1 }
+    symbol: new PointSymbol3D({
+      symbolLayers: [new ObjectSymbol3DLayer({
+        resource: { primitive: "cylinder" },
+        material: { color: [0, 220, 255, 0.9] },
+        emissive: { source: "color", strength: 1.0 },
+        width: 12000,
+        height: 25000,
+        depth: 12000
+      })]
     })
   }),
   popupEnabled: false,
@@ -113,11 +120,13 @@ const militaryLayer = new FeatureLayer({
   title: "Military Installations",
   renderer: new SimpleRenderer({
     symbol: new PointSymbol3D({
-      symbolLayers: [new IconSymbol3DLayer({
-        resource: { primitive: "kite" },
-        size: 6,
-        material: { color: [255, 68, 204, 0.8] },
-        outline: { color: [255, 68, 204, 0.3], size: 1 }
+      symbolLayers: [new ObjectSymbol3DLayer({
+        resource: { primitive: "tetrahedron" },
+        material: { color: [255, 60, 200, 0.9] },
+        emissive: { source: "color", strength: 1.2 },
+        width: 25000,
+        height: 35000,
+        depth: 25000
       })]
     })
   }),
@@ -150,7 +159,15 @@ const view = new SceneView({
     atmosphereEnabled: true,
     atmosphere: { quality: "high" },
     starsEnabled: true,
-    lighting: { type: "virtual" }
+    lighting: {
+      type: "virtual",
+      glow: { intensity: 0.4 }
+    }
+  },
+  highlightOptions: {
+    haloColor: [0, 255, 200, 1],
+    haloOpacity: 0.9,
+    color: [0, 255, 200, 0.3]
   },
   camera: {
     position: { longitude: -10, latitude: 20, z: 25000000 },
@@ -336,23 +353,23 @@ function watchCameraAltitude() {
 // CITY-LEVEL DATA: LIVE TRAFFIC CAMERAS (DOT APIs)
 // =====================================================
 
-// Live feed camera — bright green diamond, large and distinctive
+// Live feed camera — bright green diamond with glow
 const cctvSymbolLive = new PointSymbol3D({
   symbolLayers: [new IconSymbol3DLayer({
     resource: { primitive: "kite" },
-    size: 14,
-    material: { color: [0, 255, 65, 1] },
-    outline: { color: [0, 255, 65, 0.7], size: 3 }
+    size: 16,
+    material: { color: [0, 255, 100, 1] },
+    outline: { color: [0, 255, 100, 0.8], size: 3 }
   })]
 });
 
-// Location-only camera — small dim red dot
+// Location-only camera — dim gray-red small dot
 const cctvSymbolOffline = new PointSymbol3D({
   symbolLayers: [new IconSymbol3DLayer({
     resource: { primitive: "circle" },
     size: 5,
-    material: { color: [255, 60, 60, 0.5] },
-    outline: { color: [255, 60, 60, 0.2], size: 1 }
+    material: { color: [180, 60, 60, 0.4] },
+    outline: { color: [180, 60, 60, 0.15], size: 1 }
   })]
 });
 
@@ -590,115 +607,166 @@ function initSearchBar() {
 }
 
 // =====================================================
-// SYMBOLS
+// SYMBOLS — 3D Volumetric + Emissive (ArcGIS 5.0)
 // =====================================================
 
+// --- General Satellites: Green emissive spheres ---
 const satSymbol = new PointSymbol3D({
-  symbolLayers: [new IconSymbol3DLayer({
-    resource: { primitive: "circle" },
-    size: 8,
-    material: { color: [0, 255, 65, 0.9] },
-    outline: { color: [0, 255, 65, 0.4], size: 2 }
+  symbolLayers: [new ObjectSymbol3DLayer({
+    resource: { primitive: "sphere" },
+    material: { color: [0, 255, 120, 1] },
+    emissive: { source: "color", strength: 1.5 },
+    width: 80000,
+    height: 80000,
+    depth: 80000
   })]
 });
 
 const satSymbolSelected = new PointSymbol3D({
-  symbolLayers: [new IconSymbol3DLayer({
-    resource: { primitive: "circle" },
-    size: 14,
-    material: { color: [255, 176, 0, 1] },
-    outline: { color: [255, 176, 0, 0.5], size: 3 }
+  symbolLayers: [new ObjectSymbol3DLayer({
+    resource: { primitive: "diamond" },
+    material: { color: [255, 220, 50, 1] },
+    emissive: { source: "color", strength: 2.5 },
+    width: 150000,
+    height: 150000,
+    depth: 150000
   })]
 });
 
+// --- General Satellite Orbits: Glowing green 3D tubes ---
 const orbitSymbol = new LineSymbol3D({
-  symbolLayers: [new LineSymbol3DLayer({ material: { color: [0, 255, 65, 0.3] }, size: 1 })]
+  symbolLayers: [new PathSymbol3DLayer({
+    profile: "circle",
+    material: { color: [0, 255, 120, 0.35] },
+    emissive: { source: "color", strength: 0.8 },
+    width: 8000,
+    height: 8000,
+    cap: "round"
+  })]
 });
 
 const orbitSymbolSelected = new LineSymbol3D({
-  symbolLayers: [new LineSymbol3DLayer({ material: { color: [255, 176, 0, 0.6] }, size: 2 })]
+  symbolLayers: [new PathSymbol3DLayer({
+    profile: "circle",
+    material: { color: [255, 220, 50, 0.8] },
+    emissive: { source: "color", strength: 2.0 },
+    width: 15000,
+    height: 15000,
+    cap: "round"
+  })]
 });
 
-// SpaceX Starlink symbols — blue/white theme
+// --- SpaceX Starlink: Bright cyan-white emissive diamonds ---
 const starlinkSymbol = new PointSymbol3D({
-  symbolLayers: [new IconSymbol3DLayer({
-    resource: { primitive: "square" },
-    size: 5,
-    material: { color: [79, 195, 247, 0.85] },
-    outline: { color: [79, 195, 247, 0.3], size: 1 }
+  symbolLayers: [new ObjectSymbol3DLayer({
+    resource: { primitive: "diamond" },
+    material: { color: [80, 200, 255, 1] },
+    emissive: { source: "color", strength: 2.0 },
+    width: 60000,
+    height: 60000,
+    depth: 60000
   })]
 });
 
 const starlinkSymbolSelected = new PointSymbol3D({
-  symbolLayers: [new IconSymbol3DLayer({
-    resource: { primitive: "square" },
-    size: 12,
+  symbolLayers: [new ObjectSymbol3DLayer({
+    resource: { primitive: "diamond" },
     material: { color: [255, 255, 255, 1] },
-    outline: { color: [79, 195, 247, 0.7], size: 3 }
+    emissive: { source: "color", strength: 3.0 },
+    width: 140000,
+    height: 140000,
+    depth: 140000
   })]
 });
 
+// --- Starlink Orbits: Electric blue 3D tubes ---
 const starlinkOrbitSymbol = new LineSymbol3D({
-  symbolLayers: [new LineSymbol3DLayer({ material: { color: [79, 195, 247, 0.2] }, size: 0.8 })]
+  symbolLayers: [new PathSymbol3DLayer({
+    profile: "circle",
+    material: { color: [80, 200, 255, 0.3] },
+    emissive: { source: "color", strength: 1.0 },
+    width: 6000,
+    height: 6000,
+    cap: "round"
+  })]
 });
 
 const starlinkOrbitSymbolSelected = new LineSymbol3D({
-  symbolLayers: [new LineSymbol3DLayer({ material: { color: [255, 255, 255, 0.5] }, size: 1.5 })]
+  symbolLayers: [new PathSymbol3DLayer({
+    profile: "circle",
+    material: { color: [180, 230, 255, 0.9] },
+    emissive: { source: "color", strength: 2.5 },
+    width: 12000,
+    height: 12000,
+    cap: "round"
+  })]
 });
 
+// --- Coverage Footprints ---
 const footprintSymbol = new PolygonSymbol3D({
   symbolLayers: [new FillSymbol3DLayer({
-    material: { color: [0, 229, 255, 0.06] },
-    outline: { color: [0, 229, 255, 0.3], size: 1 }
+    material: { color: [0, 255, 180, 0.05] },
+    outline: { color: [0, 255, 180, 0.25], size: 1.2 }
   })]
 });
 
 const footprintSymbolSelected = new PolygonSymbol3D({
   symbolLayers: [new FillSymbol3DLayer({
-    material: { color: [255, 176, 0, 0.1] },
-    outline: { color: [255, 176, 0, 0.5], size: 1.5 }
+    material: { color: [255, 220, 50, 0.08] },
+    outline: { color: [255, 220, 50, 0.5], size: 1.5 }
   })]
 });
 
+// --- Aircraft: Amber emissive cones (directional) ---
 const aircraftSymbol = new PointSymbol3D({
-  symbolLayers: [new IconSymbol3DLayer({
-    resource: { primitive: "triangle" },
-    size: 7,
-    material: { color: [255, 176, 0, 0.8] },
-    outline: { color: [255, 176, 0, 0.3], size: 1 }
+  symbolLayers: [new ObjectSymbol3DLayer({
+    resource: { primitive: "cone" },
+    material: { color: [255, 180, 30, 1] },
+    emissive: { source: "color", strength: 1.2 },
+    width: 40000,
+    height: 60000,
+    depth: 40000,
+    heading: 0,
+    tilt: -90
   })]
 });
 
+// --- Earthquakes: Red emissive spheres, magnitude-scaled ---
 function quakeSymbol(mag) {
-  const size = Math.max(4, Math.min(20, mag * 3));
-  const alpha = Math.min(1, 0.4 + mag * 0.1);
+  const size = Math.max(30000, Math.min(200000, mag * 30000));
+  const strength = Math.min(3, 0.8 + mag * 0.3);
   return new PointSymbol3D({
-    symbolLayers: [new IconSymbol3DLayer({
-      resource: { primitive: "circle" },
-      size: size,
-      material: { color: [255, 51, 51, alpha] },
-      outline: { color: [255, 51, 51, 0.3], size: 1 }
+    symbolLayers: [new ObjectSymbol3DLayer({
+      resource: { primitive: "sphere" },
+      material: { color: [255, 50, 50, 1] },
+      emissive: { source: "color", strength },
+      width: size,
+      height: size,
+      depth: size
     })]
   });
 }
 
+// --- NASA Events: Category-colored emissive tetrahedrons ---
 function nasaEventSymbol(category) {
   const colors = {
-    "Wildfires": [255, 102, 0, 0.9],
-    "Volcanoes": [255, 0, 0, 0.9],
-    "Severe Storms": [128, 128, 255, 0.9],
-    "Sea and Lake Ice": [200, 230, 255, 0.9],
-    "Floods": [0, 100, 255, 0.9],
-    "Landslides": [139, 90, 43, 0.9],
-    "default": [255, 165, 0, 0.9]
+    "Wildfires": [255, 120, 20],
+    "Volcanoes": [255, 30, 30],
+    "Severe Storms": [140, 140, 255],
+    "Sea and Lake Ice": [200, 240, 255],
+    "Floods": [30, 120, 255],
+    "Landslides": [180, 120, 60],
+    "default": [255, 180, 40]
   };
   const color = colors[category] || colors["default"];
   return new PointSymbol3D({
-    symbolLayers: [new IconSymbol3DLayer({
-      resource: { primitive: "square" },
-      size: 8,
-      material: { color },
-      outline: { color: [color[0], color[1], color[2], 0.4], size: 1.5 }
+    symbolLayers: [new ObjectSymbol3DLayer({
+      resource: { primitive: "tetrahedron" },
+      material: { color: [...color, 1] },
+      emissive: { source: "color", strength: 1.5 },
+      width: 60000,
+      height: 80000,
+      depth: 60000
     })]
   });
 }
