@@ -70,6 +70,8 @@ const footprintLayer = new GraphicsLayer({ title: "Footprints" });
 const aircraftLayer = new GraphicsLayer({ title: "Aircraft", elevationInfo: { mode: "absolute-height" } });
 const earthquakeLayer = new GraphicsLayer({ title: "Earthquakes" });
 const nasaEventLayer = new GraphicsLayer({ title: "NASA Events" });
+const cctvLayer = new GraphicsLayer({ title: "CCTV Cameras" });
+const urbanPOILayer = new GraphicsLayer({ title: "Urban POIs" });
 
 // ArcGIS FeatureLayers for submarine cables and military bases
 const cableLayer = new FeatureLayer({
@@ -129,6 +131,7 @@ const map = new Map({
     footprintLayer, orbitLayer,
     earthquakeLayer, nasaEventLayer,
     militaryLayer,
+    cctvLayer, urbanPOILayer,
     satelliteLayer, aircraftLayer
   ]
 });
@@ -188,6 +191,8 @@ async function flyToCity(lat, lon, name) {
   // Switch to city basemap and show buildings
   map.basemap = CITY_BASEMAP;
   buildingsLayer.visible = true;
+  cctvLayer.visible = true;
+  urbanPOILayer.visible = true;
   isCityView = true;
   updateCityViewIndicator();
 
@@ -197,14 +202,21 @@ async function flyToCity(lat, lon, name) {
     tilt: CITY_VIEW_TILT
   }, { duration: 3000, easing: "ease-in-out" });
 
-  logStatus(`Viewing ${name} — 3D Buildings active`);
+  logStatus(`Viewing ${name} — Loading city data...`);
+  loadCityData(lat, lon);
 }
 
 function returnToGlobe() {
   map.basemap = GLOBE_BASEMAP;
   buildingsLayer.visible = false;
+  cctvLayer.removeAll();
+  urbanPOILayer.removeAll();
+  cctvLayer.visible = false;
+  urbanPOILayer.visible = false;
   isCityView = false;
   updateCityViewIndicator();
+  document.getElementById("hud-cctv-count").textContent = "CCTV: --";
+  document.getElementById("hud-poi-count").textContent = "URBAN POI: --";
 
   view.goTo({
     position: { longitude: view.camera.position.longitude, latitude: view.camera.position.latitude, z: 25000000 },
@@ -238,10 +250,153 @@ function watchCameraAltitude() {
       // Zoomed back out — return to satellite
       map.basemap = GLOBE_BASEMAP;
       buildingsLayer.visible = false;
+      cctvLayer.removeAll();
+      urbanPOILayer.removeAll();
       isCityView = false;
       updateCityViewIndicator();
+      document.getElementById("hud-cctv-count").textContent = "CCTV: --";
+      document.getElementById("hud-poi-count").textContent = "URBAN POI: --";
     }
   }, 300);
+}
+
+// =====================================================
+// CITY-LEVEL DATA: CCTV + URBAN POIs (Overpass API)
+// =====================================================
+
+const cctvSymbol = new PointSymbol3D({
+  symbolLayers: [new IconSymbol3DLayer({
+    resource: { primitive: "square" },
+    size: 6,
+    material: { color: [255, 50, 50, 0.9] },
+    outline: { color: [255, 50, 50, 0.4], size: 1 }
+  })]
+});
+
+const fireStationSymbol = new PointSymbol3D({
+  symbolLayers: [new IconSymbol3DLayer({
+    resource: { primitive: "triangle" },
+    size: 8,
+    material: { color: [255, 100, 0, 0.9] },
+    outline: { color: [255, 100, 0, 0.4], size: 1 }
+  })]
+});
+
+const policeSymbol = new PointSymbol3D({
+  symbolLayers: [new IconSymbol3DLayer({
+    resource: { primitive: "kite" },
+    size: 8,
+    material: { color: [0, 120, 255, 0.9] },
+    outline: { color: [0, 120, 255, 0.4], size: 1 }
+  })]
+});
+
+const hospitalSymbol = new PointSymbol3D({
+  symbolLayers: [new IconSymbol3DLayer({
+    resource: { primitive: "cross" },
+    size: 8,
+    material: { color: [255, 255, 255, 0.9] },
+    outline: { color: [255, 0, 0, 0.4], size: 1 }
+  })]
+});
+
+const telecomSymbol = new PointSymbol3D({
+  symbolLayers: [new IconSymbol3DLayer({
+    resource: { primitive: "circle" },
+    size: 5,
+    material: { color: [0, 200, 255, 0.8] },
+    outline: { color: [0, 200, 255, 0.3], size: 1 }
+  })]
+});
+
+async function loadCityData(lat, lon) {
+  cctvLayer.removeAll();
+  urbanPOILayer.removeAll();
+
+  const radius = 5000; // 5km radius around city center
+  const overpassUrl = "https://overpass-api.de/api/interpreter";
+
+  const query = `[out:json][timeout:15];
+(
+  node["man_made"="surveillance"](around:${radius},${lat},${lon});
+  node["amenity"="police"](around:${radius},${lat},${lon});
+  node["amenity"="fire_station"](around:${radius},${lat},${lon});
+  node["amenity"="hospital"](around:${radius},${lat},${lon});
+  node["man_made"="mast"]["tower:type"="communication"](around:${radius},${lat},${lon});
+  node["telecom"="exchange"](around:${radius},${lat},${lon});
+);
+out body;`;
+
+  try {
+    const resp = await fetch(overpassUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: "data=" + encodeURIComponent(query)
+    });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const data = await resp.json();
+
+    let cctvCount = 0, poiCount = 0;
+
+    for (const el of data.elements) {
+      const tags = el.tags || {};
+      const point = new Point({ longitude: el.lon, latitude: el.lat, z: 5 });
+
+      if (tags["man_made"] === "surveillance") {
+        cctvLayer.add(new Graphic({
+          geometry: point,
+          symbol: cctvSymbol,
+          attributes: {
+            type: "cctv",
+            name: tags.description || tags.name || "CCTV Camera",
+            operator: tags.operator || "Unknown",
+            camera_type: tags["surveillance:type"] || tags["camera:type"] || "Unknown",
+            mount: tags["surveillance:zone"] || "Unknown",
+            lat: el.lat.toFixed(5),
+            lon: el.lon.toFixed(5)
+          }
+        }));
+        cctvCount++;
+      } else {
+        let symbol, typeName;
+        if (tags.amenity === "police") {
+          symbol = policeSymbol;
+          typeName = "police";
+        } else if (tags.amenity === "fire_station") {
+          symbol = fireStationSymbol;
+          typeName = "fire_station";
+        } else if (tags.amenity === "hospital") {
+          symbol = hospitalSymbol;
+          typeName = "hospital";
+        } else {
+          symbol = telecomSymbol;
+          typeName = "telecom";
+        }
+
+        urbanPOILayer.add(new Graphic({
+          geometry: point,
+          symbol: symbol,
+          attributes: {
+            type: typeName,
+            name: tags.name || typeName.replace("_", " ").toUpperCase(),
+            operator: tags.operator || "",
+            lat: el.lat.toFixed(5),
+            lon: el.lon.toFixed(5)
+          }
+        }));
+        poiCount++;
+      }
+    }
+
+    console.log(`[WorldView] City data: ${cctvCount} CCTV, ${poiCount} urban POIs`);
+    document.getElementById("hud-cctv-count").textContent = `CCTV: ${cctvCount}`;
+    document.getElementById("hud-poi-count").textContent = `URBAN POI: ${poiCount}`;
+    logStatus(`Loaded ${cctvCount} CCTV cameras + ${poiCount} urban POIs`);
+  } catch (e) {
+    console.warn("[WorldView] City data load failed:", e.message);
+    document.getElementById("hud-cctv-count").textContent = "CCTV: --";
+    document.getElementById("hud-poi-count").textContent = "URBAN POI: --";
+  }
 }
 
 // Search bar logic
@@ -278,9 +433,12 @@ function initSearchBar() {
     }, 400);
   });
 
-  results.addEventListener("click", (e) => {
+  // Use mousedown instead of click to prevent ArcGIS SceneView from intercepting
+  results.addEventListener("mousedown", (e) => {
     const item = e.target.closest(".search-result-item");
     if (!item || !item.dataset.lat) return;
+    e.stopPropagation();
+    e.preventDefault();
     const lat = parseFloat(item.dataset.lat);
     const lon = parseFloat(item.dataset.lon);
     const name = item.dataset.name;
@@ -289,12 +447,21 @@ function initSearchBar() {
     flyToCity(lat, lon, name);
   });
 
+  // Stop all pointer events on search results from reaching SceneView
+  results.addEventListener("pointerdown", (e) => e.stopPropagation());
+  results.addEventListener("click", (e) => e.stopPropagation());
+
   // Enter key — fly to first result
   input.addEventListener("keydown", (e) => {
     if (e.key === "Enter") {
       const first = results.querySelector(".search-result-item[data-lat]");
       if (first) {
-        first.click();
+        const lat = parseFloat(first.dataset.lat);
+        const lon = parseFloat(first.dataset.lon);
+        const name = first.dataset.name;
+        input.value = name;
+        results.classList.add("hidden");
+        flyToCity(lat, lon, name);
       }
     }
     if (e.key === "Escape") {
@@ -304,7 +471,7 @@ function initSearchBar() {
   });
 
   // Close results on outside click
-  document.addEventListener("click", (e) => {
+  document.addEventListener("mousedown", (e) => {
     if (!e.target.closest("#search-container")) {
       results.classList.add("hidden");
     }
@@ -843,6 +1010,16 @@ function showFeatureDetail(attrs) {
     html += detailRow("MAGNITUDE", attrs.magnitude);
     html += detailRow("LAT", `${attrs.lat}°`);
     html += detailRow("LON", `${attrs.lon}°`);
+  } else if (attrs.type === "cctv") {
+    html += detailRow("OPERATOR", attrs.operator);
+    html += detailRow("CAMERA TYPE", attrs.camera_type);
+    html += detailRow("ZONE", attrs.mount);
+    html += detailRow("LAT", `${attrs.lat}°`);
+    html += detailRow("LON", `${attrs.lon}°`);
+  } else if (["police", "fire_station", "hospital", "telecom"].includes(attrs.type)) {
+    if (attrs.operator) html += detailRow("OPERATOR", attrs.operator);
+    html += detailRow("LAT", `${attrs.lat}°`);
+    html += detailRow("LON", `${attrs.lon}°`);
   } else {
     // Generic — show all attributes
     for (const [k, v] of Object.entries(attrs)) {
@@ -886,6 +1063,8 @@ const layerMap = {
   "toggle-events": nasaEventLayer,
   "toggle-cables": [cableLayer, cableTerminalLayer],
   "toggle-bases": militaryLayer,
+  "toggle-cctv": cctvLayer,
+  "toggle-urban": urbanPOILayer,
 };
 
 for (const [id, layers] of Object.entries(layerMap)) {
@@ -939,6 +1118,14 @@ view.on("click", async (event) => {
       return;
     }
     if (r.graphic.layer === nasaEventLayer) {
+      showFeatureDetail(attrs);
+      return;
+    }
+    if (r.graphic.layer === cctvLayer) {
+      showFeatureDetail(attrs);
+      return;
+    }
+    if (r.graphic.layer === urbanPOILayer) {
       showFeatureDetail(attrs);
       return;
     }
