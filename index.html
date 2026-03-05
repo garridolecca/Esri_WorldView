@@ -6,6 +6,7 @@
   <title>Esri WorldView - Satellite Intelligence Simulator</title>
   <link rel="stylesheet" href="https://js.arcgis.com/5.0/esri/themes/dark/main.css" />
   <link rel="stylesheet" href="css/styles.css" />
+  <script src="https://unpkg.com/satellite.js@5.0.0/dist/satellite.min.js"></script>
   <script type="module" src="https://js.arcgis.com/5.0/"></script>
   <script type="module" src="js/app.js"></script>
 </head>
@@ -43,6 +44,10 @@
         <div class="hud-label">TRACKING</div>
         <div id="hud-sat-count">SATELLITES: --</div>
         <div id="hud-aircraft-count">AIRCRAFT: --</div>
+      </div>
+      <div class="hud-section">
+        <div class="hud-label">STATUS</div>
+        <div id="hud-status" class="pulse">Initializing...</div>
       </div>
     </div>
 
