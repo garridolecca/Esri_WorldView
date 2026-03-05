@@ -11,10 +11,67 @@
   <script type="module" src="js/app.js"></script>
 </head>
 <body>
+  <!-- Intro Modal -->
+  <div id="intro-modal">
+    <div id="intro-content">
+      <div id="intro-header">
+        <div id="intro-logo">ESRI WORLDVIEW</div>
+        <div id="intro-tagline">SATELLITE INTELLIGENCE SIMULATOR</div>
+      </div>
+
+      <div id="intro-body">
+        <div class="intro-section">
+          <div class="intro-section-title">// OVERVIEW</div>
+          <p>Real-time global intelligence visualization combining satellite tracking, aircraft monitoring, seismic activity, natural disasters, submarine cable infrastructure, and military installations on a 3D globe.</p>
+        </div>
+
+        <div class="intro-columns">
+          <div class="intro-section">
+            <div class="intro-section-title">// DATA FEEDS</div>
+            <ul>
+              <li><span class="dot dot-green"></span> Satellites &mdash; CelesTrak TLE / SGP4</li>
+              <li><span class="dot dot-amber"></span> Aircraft &mdash; OpenSky Network ADS-B</li>
+              <li><span class="dot dot-red"></span> Earthquakes &mdash; USGS Real-Time</li>
+              <li><span class="dot dot-orange"></span> Natural Events &mdash; NASA EONET</li>
+              <li><span class="dot dot-cyan"></span> Submarine Cables &mdash; ArcGIS</li>
+              <li><span class="dot dot-magenta"></span> Military Bases &mdash; US DoD / ArcGIS</li>
+            </ul>
+          </div>
+
+          <div class="intro-section">
+            <div class="intro-section-title">// CONTROLS</div>
+            <ul>
+              <li><strong>Left-click + drag</strong> &mdash; Rotate globe</li>
+              <li><strong>Right-click + drag</strong> &mdash; Pan</li>
+              <li><strong>Scroll wheel</strong> &mdash; Zoom in/out</li>
+              <li><strong>Click feature</strong> &mdash; View details</li>
+              <li><strong>Render modes</strong> &mdash; NVG / Thermal / CRT</li>
+              <li><strong>Layer toggles</strong> &mdash; Show/hide datasets</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="intro-section">
+          <div class="intro-section-title">// RENDER MODES</div>
+          <div class="intro-modes">
+            <div class="intro-mode"><span class="mode-badge mode-std">STD</span> Standard satellite imagery</div>
+            <div class="intro-mode"><span class="mode-badge mode-nvg">NVG</span> Night vision green phosphor</div>
+            <div class="intro-mode"><span class="mode-badge mode-thm">THM</span> FLIR thermal imaging</div>
+            <div class="intro-mode"><span class="mode-badge mode-crt2">CRT</span> Retro CRT with scanlines</div>
+          </div>
+        </div>
+      </div>
+
+      <button id="intro-launch">LAUNCH WORLDVIEW</button>
+      <div id="intro-footer">Built with ArcGIS Maps SDK for JavaScript 5.0 &bull; satellite.js &bull; Open Data APIs</div>
+    </div>
+  </div>
+
+  <!-- Main App -->
   <div id="viewDiv"></div>
 
   <!-- HUD Overlay -->
-  <div id="hud-overlay">
+  <div id="hud-overlay" class="hidden">
     <!-- Top Bar -->
     <div id="hud-top-bar">
       <div id="hud-title">ESRI WORLDVIEW <span class="hud-subtitle">// INTELLIGENCE SIMULATOR</span></div>
@@ -44,6 +101,10 @@
         <div class="hud-label">TRACKING</div>
         <div id="hud-sat-count">SATELLITES: --</div>
         <div id="hud-aircraft-count">AIRCRAFT: --</div>
+        <div id="hud-quake-count">EARTHQUAKES: --</div>
+        <div id="hud-event-count">NASA EVENTS: --</div>
+        <div id="hud-cable-count">SUB CABLES: --</div>
+        <div id="hud-base-count">MIL BASES: --</div>
       </div>
       <div class="hud-section">
         <div class="hud-label">STATUS</div>
@@ -65,10 +126,14 @@
       <div class="hud-section">
         <div class="hud-label">LAYERS</div>
         <div class="hud-toggle-group">
-          <label class="hud-toggle"><input type="checkbox" id="toggle-satellites" checked /><span>SATELLITES</span></label>
-          <label class="hud-toggle"><input type="checkbox" id="toggle-orbits" checked /><span>ORBITS</span></label>
-          <label class="hud-toggle"><input type="checkbox" id="toggle-footprints" checked /><span>FOOTPRINTS</span></label>
-          <label class="hud-toggle"><input type="checkbox" id="toggle-aircraft" checked /><span>AIRCRAFT</span></label>
+          <label class="hud-toggle"><input type="checkbox" id="toggle-satellites" checked /><span class="toggle-green">SATELLITES</span></label>
+          <label class="hud-toggle"><input type="checkbox" id="toggle-orbits" checked /><span class="toggle-green">ORBITS</span></label>
+          <label class="hud-toggle"><input type="checkbox" id="toggle-footprints" checked /><span class="toggle-green">FOOTPRINTS</span></label>
+          <label class="hud-toggle"><input type="checkbox" id="toggle-aircraft" checked /><span class="toggle-amber">AIRCRAFT</span></label>
+          <label class="hud-toggle"><input type="checkbox" id="toggle-earthquakes" checked /><span class="toggle-red">EARTHQUAKES</span></label>
+          <label class="hud-toggle"><input type="checkbox" id="toggle-events" checked /><span class="toggle-orange">NASA EVENTS</span></label>
+          <label class="hud-toggle"><input type="checkbox" id="toggle-cables" checked /><span class="toggle-cyan">SUB CABLES</span></label>
+          <label class="hud-toggle"><input type="checkbox" id="toggle-bases" checked /><span class="toggle-magenta">MIL BASES</span></label>
         </div>
       </div>
       <div class="hud-section">
@@ -78,24 +143,29 @@
           <button class="hud-btn goto-btn" data-target="usa">USA</button>
           <button class="hud-btn goto-btn" data-target="europe">EUROPE</button>
           <button class="hud-btn goto-btn" data-target="asia">ASIA</button>
+          <button class="hud-btn goto-btn" data-target="mideast">MIDEAST</button>
+          <button class="hud-btn goto-btn" data-target="pacific">PACIFIC</button>
         </div>
       </div>
     </div>
 
-    <!-- Satellite Detail Popup -->
-    <div id="sat-detail" class="hidden">
-      <div class="hud-label">TARGET INFO</div>
-      <div id="sat-detail-name">--</div>
-      <div id="sat-detail-id">NORAD: --</div>
-      <div id="sat-detail-lat">LAT: --</div>
-      <div id="sat-detail-lon">LON: --</div>
-      <div id="sat-detail-alt">ALT: --</div>
-      <div id="sat-detail-vel">VEL: --</div>
-      <button id="sat-detail-close" class="hud-btn">DISMISS</button>
+    <!-- Feature Detail Popup -->
+    <div id="feature-detail" class="hidden">
+      <div class="hud-label" id="feature-detail-label">TARGET INFO</div>
+      <div id="feature-detail-body"></div>
+      <button id="feature-detail-close" class="hud-btn">DISMISS</button>
     </div>
 
     <!-- Scan Line Effect (CRT mode) -->
     <div id="scanlines" class="hidden"></div>
+
+    <!-- Loading Overlay -->
+    <div id="loading-overlay">
+      <div id="loading-bar-container">
+        <div id="loading-bar"></div>
+      </div>
+      <div id="loading-text">LOADING DATA FEEDS...</div>
+    </div>
   </div>
 </body>
 </html>

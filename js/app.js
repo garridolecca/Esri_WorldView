@@ -4,23 +4,18 @@
 // =====================================================
 
 const [
-  Map,
-  SceneView,
-  GraphicsLayer,
-  Graphic,
-  Point,
-  Polyline,
-  Polygon,
-  PointSymbol3D,
-  IconSymbol3DLayer,
-  LineSymbol3D,
-  LineSymbol3DLayer,
-  PolygonSymbol3D,
-  FillSymbol3DLayer
+  Map, SceneView, GraphicsLayer, FeatureLayer, Graphic,
+  Point, Polyline, Polygon,
+  PointSymbol3D, IconSymbol3DLayer,
+  LineSymbol3D, LineSymbol3DLayer,
+  PolygonSymbol3D, FillSymbol3DLayer,
+  SimpleRenderer, UniqueValueRenderer,
+  SimpleLineSymbol, SimpleMarkerSymbol
 ] = await $arcgis.import([
   "@arcgis/core/Map.js",
   "@arcgis/core/views/SceneView.js",
   "@arcgis/core/layers/GraphicsLayer.js",
+  "@arcgis/core/layers/FeatureLayer.js",
   "@arcgis/core/Graphic.js",
   "@arcgis/core/geometry/Point.js",
   "@arcgis/core/geometry/Polyline.js",
@@ -30,17 +25,18 @@ const [
   "@arcgis/core/symbols/LineSymbol3D.js",
   "@arcgis/core/symbols/LineSymbol3DLayer.js",
   "@arcgis/core/symbols/PolygonSymbol3D.js",
-  "@arcgis/core/symbols/FillSymbol3DLayer.js"
+  "@arcgis/core/symbols/FillSymbol3DLayer.js",
+  "@arcgis/core/renderers/SimpleRenderer.js",
+  "@arcgis/core/renderers/UniqueValueRenderer.js",
+  "@arcgis/core/symbols/SimpleLineSymbol.js",
+  "@arcgis/core/symbols/SimpleMarkerSymbol.js"
 ]);
 
-// satellite.js loaded via <script> tag — available as window.satellite
 const satelliteJs = window.satellite;
-if (!satelliteJs) {
-  console.error("[WorldView] satellite.js not loaded!");
-}
+if (!satelliteJs) console.error("[WorldView] satellite.js not loaded!");
 
 // =====================================================
-// CONFIGURATION
+// CONFIG
 // =====================================================
 
 const CONFIG = {
@@ -48,8 +44,13 @@ const CONFIG = {
   TLE_VISUAL_URL: "https://celestrak.org/NORAD/elements/gp.php?GROUP=visual&FORMAT=tle",
   TLE_SCIENCE_URL: "https://celestrak.org/NORAD/elements/gp.php?GROUP=science&FORMAT=tle",
   OPENSKY_URL: "https://opensky-network.org/api/states/all",
+  USGS_QUAKE_URL: "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/2.5_day.geojson",
+  NASA_EONET_URL: "https://eonet.gsfc.nasa.gov/api/v3/events?status=open&limit=150",
+  CABLES_URL: "https://services.arcgis.com/nzS0F0zdNLvs7nc8/arcgis/rest/services/Submarine_Cables/FeatureServer",
+  MILITARY_URL: "https://services2.arcgis.com/FiaPA4ga0iQKduv3/arcgis/rest/services/MIRTA_Points_A_view/FeatureServer/0",
   SAT_UPDATE_INTERVAL: 2000,
   AIRCRAFT_UPDATE_INTERVAL: 15000,
+  QUAKE_UPDATE_INTERVAL: 60000,
   MAX_SATELLITES: 250,
   MAX_AIRCRAFT: 600,
   ORBIT_POINTS: 180,
@@ -64,6 +65,54 @@ const satelliteLayer = new GraphicsLayer({ title: "Satellites", elevationInfo: {
 const orbitLayer = new GraphicsLayer({ title: "Orbits", elevationInfo: { mode: "absolute-height" } });
 const footprintLayer = new GraphicsLayer({ title: "Footprints" });
 const aircraftLayer = new GraphicsLayer({ title: "Aircraft", elevationInfo: { mode: "absolute-height" } });
+const earthquakeLayer = new GraphicsLayer({ title: "Earthquakes" });
+const nasaEventLayer = new GraphicsLayer({ title: "NASA Events" });
+
+// ArcGIS FeatureLayers for submarine cables and military bases
+const cableLayer = new FeatureLayer({
+  url: CONFIG.CABLES_URL + "/2",
+  title: "Submarine Cables",
+  renderer: new SimpleRenderer({
+    symbol: new SimpleLineSymbol({
+      color: [0, 229, 255, 0.4],
+      width: 1.2,
+      style: "solid"
+    })
+  }),
+  popupEnabled: false,
+  visible: true
+});
+
+const cableTerminalLayer = new FeatureLayer({
+  url: CONFIG.CABLES_URL + "/1",
+  title: "Cable Terminals",
+  renderer: new SimpleRenderer({
+    symbol: new SimpleMarkerSymbol({
+      color: [0, 229, 255, 0.7],
+      size: 4,
+      outline: { color: [0, 229, 255, 0.3], width: 1 }
+    })
+  }),
+  popupEnabled: false,
+  visible: true
+});
+
+const militaryLayer = new FeatureLayer({
+  url: CONFIG.MILITARY_URL,
+  title: "Military Installations",
+  renderer: new SimpleRenderer({
+    symbol: new PointSymbol3D({
+      symbolLayers: [new IconSymbol3DLayer({
+        resource: { primitive: "kite" },
+        size: 6,
+        material: { color: [255, 68, 204, 0.8] },
+        outline: { color: [255, 68, 204, 0.3], size: 1 }
+      })]
+    })
+  }),
+  popupEnabled: false,
+  visible: true
+});
 
 // =====================================================
 // MAP & VIEW
@@ -72,7 +121,13 @@ const aircraftLayer = new GraphicsLayer({ title: "Aircraft", elevationInfo: { mo
 const map = new Map({
   basemap: "satellite",
   ground: "world-elevation",
-  layers: [footprintLayer, orbitLayer, satelliteLayer, aircraftLayer]
+  layers: [
+    cableLayer, cableTerminalLayer,
+    footprintLayer, orbitLayer,
+    earthquakeLayer, nasaEventLayer,
+    militaryLayer,
+    satelliteLayer, aircraftLayer
+  ]
 });
 
 const view = new SceneView({
@@ -95,11 +150,98 @@ const view = new SceneView({
 });
 
 // =====================================================
-// TLE PARSING & ORBIT PROPAGATION
+// SYMBOLS
+// =====================================================
+
+const satSymbol = new PointSymbol3D({
+  symbolLayers: [new IconSymbol3DLayer({
+    resource: { primitive: "circle" },
+    size: 8,
+    material: { color: [0, 255, 65, 0.9] },
+    outline: { color: [0, 255, 65, 0.4], size: 2 }
+  })]
+});
+
+const satSymbolSelected = new PointSymbol3D({
+  symbolLayers: [new IconSymbol3DLayer({
+    resource: { primitive: "circle" },
+    size: 14,
+    material: { color: [255, 176, 0, 1] },
+    outline: { color: [255, 176, 0, 0.5], size: 3 }
+  })]
+});
+
+const orbitSymbol = new LineSymbol3D({
+  symbolLayers: [new LineSymbol3DLayer({ material: { color: [0, 255, 65, 0.3] }, size: 1 })]
+});
+
+const orbitSymbolSelected = new LineSymbol3D({
+  symbolLayers: [new LineSymbol3DLayer({ material: { color: [255, 176, 0, 0.6] }, size: 2 })]
+});
+
+const footprintSymbol = new PolygonSymbol3D({
+  symbolLayers: [new FillSymbol3DLayer({
+    material: { color: [0, 229, 255, 0.06] },
+    outline: { color: [0, 229, 255, 0.3], size: 1 }
+  })]
+});
+
+const footprintSymbolSelected = new PolygonSymbol3D({
+  symbolLayers: [new FillSymbol3DLayer({
+    material: { color: [255, 176, 0, 0.1] },
+    outline: { color: [255, 176, 0, 0.5], size: 1.5 }
+  })]
+});
+
+const aircraftSymbol = new PointSymbol3D({
+  symbolLayers: [new IconSymbol3DLayer({
+    resource: { primitive: "triangle" },
+    size: 7,
+    material: { color: [255, 176, 0, 0.8] },
+    outline: { color: [255, 176, 0, 0.3], size: 1 }
+  })]
+});
+
+function quakeSymbol(mag) {
+  const size = Math.max(4, Math.min(20, mag * 3));
+  const alpha = Math.min(1, 0.4 + mag * 0.1);
+  return new PointSymbol3D({
+    symbolLayers: [new IconSymbol3DLayer({
+      resource: { primitive: "circle" },
+      size: size,
+      material: { color: [255, 51, 51, alpha] },
+      outline: { color: [255, 51, 51, 0.3], size: 1 }
+    })]
+  });
+}
+
+function nasaEventSymbol(category) {
+  const colors = {
+    "Wildfires": [255, 102, 0, 0.9],
+    "Volcanoes": [255, 0, 0, 0.9],
+    "Severe Storms": [128, 128, 255, 0.9],
+    "Sea and Lake Ice": [200, 230, 255, 0.9],
+    "Floods": [0, 100, 255, 0.9],
+    "Landslides": [139, 90, 43, 0.9],
+    "default": [255, 165, 0, 0.9]
+  };
+  const color = colors[category] || colors["default"];
+  return new PointSymbol3D({
+    symbolLayers: [new IconSymbol3DLayer({
+      resource: { primitive: "square" },
+      size: 8,
+      material: { color },
+      outline: { color: [color[0], color[1], color[2], 0.4], size: 1.5 }
+    })]
+  });
+}
+
+// =====================================================
+// SATELLITE PROPAGATION
 // =====================================================
 
 const satData = [];
-let selectedSat = null;
+let selectedFeature = null;
 
 function parseTLEs(tleText) {
   const lines = tleText.trim().split("\n").map(l => l.trim()).filter(l => l.length > 0);
@@ -126,18 +268,11 @@ function propagateSatellite(satrec, date) {
     const lon = satelliteJs.degreesLong(geo.longitude);
     if (isNaN(lat) || isNaN(lon)) return null;
     return {
-      latitude: lat,
-      longitude: lon,
-      altitude: geo.height * 1000, // km to meters
-      velocity: Math.sqrt(
-        posVel.velocity.x ** 2 +
-        posVel.velocity.y ** 2 +
-        posVel.velocity.z ** 2
-      )
+      latitude: lat, longitude: lon,
+      altitude: geo.height * 1000,
+      velocity: Math.sqrt(posVel.velocity.x ** 2 + posVel.velocity.y ** 2 + posVel.velocity.z ** 2)
     };
-  } catch {
-    return null;
-  }
+  } catch { return null; }
 }
 
 function computeOrbitPath(satrec, startDate, minutes, numPoints) {
@@ -164,67 +299,19 @@ function computeFootprint(lat, lon, altKm, segments) {
   return ring;
 }
 
-// =====================================================
-// SYMBOLS
-// =====================================================
-
-const satSymbol = new PointSymbol3D({
-  symbolLayers: [new IconSymbol3DLayer({
-    resource: { primitive: "circle" },
-    size: 8,
-    material: { color: [0, 255, 65, 0.9] },
-    outline: { color: [0, 255, 65, 0.4], size: 2 }
-  })]
-});
-
-const satSymbolSelected = new PointSymbol3D({
-  symbolLayers: [new IconSymbol3DLayer({
-    resource: { primitive: "circle" },
-    size: 14,
-    material: { color: [255, 176, 0, 1] },
-    outline: { color: [255, 176, 0, 0.5], size: 3 }
-  })]
-});
-
-const orbitSymbol = new LineSymbol3D({
-  symbolLayers: [new LineSymbol3DLayer({
-    material: { color: [0, 255, 65, 0.3] },
-    size: 1
-  })]
-});
-
-const orbitSymbolSelected = new LineSymbol3D({
-  symbolLayers: [new LineSymbol3DLayer({
-    material: { color: [255, 176, 0, 0.6] },
-    size: 2
-  })]
-});
-
-const footprintSymbol = new PolygonSymbol3D({
-  symbolLayers: [new FillSymbol3DLayer({
-    material: { color: [0, 229, 255, 0.06] },
-    outline: { color: [0, 229, 255, 0.3], size: 1 }
-  })]
-});
-
-const footprintSymbolSelected = new PolygonSymbol3D({
-  symbolLayers: [new FillSymbol3DLayer({
-    material: { color: [255, 176, 0, 0.1] },
-    outline: { color: [255, 176, 0, 0.5], size: 1.5 }
-  })]
-});
-
-const aircraftSymbol = new PointSymbol3D({
-  symbolLayers: [new IconSymbol3DLayer({
-    resource: { primitive: "triangle" },
-    size: 7,
-    material: { color: [255, 176, 0, 0.8] },
-    outline: { color: [255, 176, 0, 0.3], size: 1 }
-  })]
-});
+function splitOrbitAtAntimeridian(path) {
+  const segments = [[]];
+  for (let i = 0; i < path.length; i++) {
+    segments[segments.length - 1].push(path[i]);
+    if (i < path.length - 1 && Math.abs(path[i + 1].longitude - path[i].longitude) > 180) {
+      segments.push([]);
+    }
+  }
+  return segments.filter(s => s.length > 1);
+}
 
 // =====================================================
-// EMBEDDED FALLBACK TLEs (fresh 2026 epoch)
+// FALLBACK TLEs
 // =====================================================
 
 const FALLBACK_TLES = [
@@ -246,15 +333,14 @@ const FALLBACK_TLES = [
 ];
 
 // =====================================================
-// SATELLITE DATA LOADING
+// DATA LOADERS
 // =====================================================
 
 async function fetchTLEs(url) {
   try {
     const resp = await fetch(url);
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-    const text = await resp.text();
-    return parseTLEs(text);
+    return parseTLEs(await resp.text());
   } catch (e) {
     console.warn(`[WorldView] TLE fetch failed: ${url}`, e.message);
     return [];
@@ -262,275 +348,256 @@ async function fetchTLEs(url) {
 }
 
 async function loadSatellites() {
-  if (!satelliteJs) {
-    console.error("[WorldView] Cannot load satellites - satellite.js unavailable");
-    return;
-  }
+  if (!satelliteJs) return;
+  setLoadingText("Fetching satellite TLE data...");
 
-  logStatus("Fetching TLE data...");
-
-  // Try fetching live TLE data from multiple groups in parallel
   const [stations, visual, science] = await Promise.all([
     fetchTLEs(CONFIG.TLE_STATIONS_URL),
     fetchTLEs(CONFIG.TLE_VISUAL_URL),
     fetchTLEs(CONFIG.TLE_SCIENCE_URL),
   ]);
 
-  // Deduplicate by NORAD ID (from TLE line 2, chars 2-7)
   const seen = new Set();
   let allTles = [];
   for (const tle of [...stations, ...visual, ...science]) {
     const noradId = tle.tle2.substring(2, 7).trim();
-    if (!seen.has(noradId)) {
-      seen.add(noradId);
-      allTles.push(tle);
-    }
+    if (!seen.has(noradId)) { seen.add(noradId); allTles.push(tle); }
   }
 
   if (allTles.length === 0) {
-    console.warn("[WorldView] No live TLE data — using embedded fallback");
-    logStatus("Using fallback satellite data");
     allTles = FALLBACK_TLES;
-  } else {
-    logStatus(`Loaded ${allTles.length} TLEs from CelesTrak`);
+    logStatus("Using fallback satellite data");
   }
 
-  // Limit and initialize satrecs
   const tles = allTles.slice(0, CONFIG.MAX_SATELLITES);
   satData.length = 0;
+  const now = new Date();
 
   for (const tle of tles) {
     try {
       const satrec = satelliteJs.twoline2satrec(tle.tle1, tle.tle2);
-      // Validate by propagating to now
-      const testPos = propagateSatellite(satrec, new Date());
-      if (!testPos) continue;
+      if (!propagateSatellite(satrec, now)) continue;
       const noradId = tle.tle2.substring(2, 7).trim();
       satData.push({ name: tle.name, satrec, noradId });
-    } catch {
-      // Skip invalid TLEs
-    }
+    } catch { /* skip */ }
   }
 
   console.log(`[WorldView] ${satData.length} satellites initialized`);
-  logStatus(`Tracking ${satData.length} satellites`);
   updateSatellites();
 }
 
-// =====================================================
-// SATELLITE RENDERING
-// =====================================================
-
 function updateSatellites() {
   if (!satelliteJs || satData.length === 0) return;
-
   const now = new Date();
-  const satGraphics = [];
-  const orbitGraphics = [];
-  const fpGraphics = [];
+  const satGraphics = [], orbitGraphics = [], fpGraphics = [];
   let count = 0;
 
   for (const sat of satData) {
     const pos = propagateSatellite(sat.satrec, now);
     if (!pos) continue;
-
     sat.currentPos = pos;
     count++;
 
-    const isSelected = selectedSat && selectedSat.noradId === sat.noradId;
+    const isSel = selectedFeature?.type === "satellite" && selectedFeature.id === sat.noradId;
 
-    // Satellite point
     satGraphics.push(new Graphic({
-      geometry: new Point({
-        longitude: pos.longitude,
-        latitude: pos.latitude,
-        z: pos.altitude
-      }),
-      symbol: isSelected ? satSymbolSelected : satSymbol,
-      attributes: {
-        name: sat.name,
-        noradId: sat.noradId,
-        lat: pos.latitude.toFixed(4),
-        lon: pos.longitude.toFixed(4),
-        alt: (pos.altitude / 1000).toFixed(1),
-        vel: pos.velocity.toFixed(2)
-      }
+      geometry: new Point({ longitude: pos.longitude, latitude: pos.latitude, z: pos.altitude }),
+      symbol: isSel ? satSymbolSelected : satSymbol,
+      attributes: { type: "satellite", name: sat.name, noradId: sat.noradId,
+        lat: pos.latitude.toFixed(4), lon: pos.longitude.toFixed(4),
+        alt: (pos.altitude / 1000).toFixed(1), vel: pos.velocity.toFixed(2) }
     }));
 
-    // Orbit path — show for selected, or for all if <= 30 sats
-    if (isSelected || satData.length <= 30) {
+    if (isSel || satData.length <= 30) {
       const orbitPath = computeOrbitPath(sat.satrec, now, 90, CONFIG.ORBIT_POINTS);
       if (orbitPath.length > 1) {
-        const segments = splitOrbitAtAntimeridian(orbitPath);
-        for (const segment of segments) {
+        for (const seg of splitOrbitAtAntimeridian(orbitPath)) {
           orbitGraphics.push(new Graphic({
-            geometry: new Polyline({
-              paths: [segment.map(p => [p.longitude, p.latitude, p.altitude])]
-            }),
-            symbol: isSelected ? orbitSymbolSelected : orbitSymbol
+            geometry: new Polyline({ paths: [seg.map(p => [p.longitude, p.latitude, p.altitude])] }),
+            symbol: isSel ? orbitSymbolSelected : orbitSymbol
           }));
         }
       }
     }
 
-    // Footprint
     const altKm = pos.altitude / 1000;
     if (altKm > 100 && altKm < 50000) {
-      const ring = computeFootprint(pos.latitude, pos.longitude, altKm, CONFIG.FOOTPRINT_SEGMENTS);
       fpGraphics.push(new Graphic({
-        geometry: new Polygon({ rings: [ring] }),
-        symbol: isSelected ? footprintSymbolSelected : footprintSymbol
+        geometry: new Polygon({ rings: [computeFootprint(pos.latitude, pos.longitude, altKm, CONFIG.FOOTPRINT_SEGMENTS)] }),
+        symbol: isSel ? footprintSymbolSelected : footprintSymbol
       }));
     }
   }
 
-  // Batch update layers
-  satelliteLayer.removeAll();
-  satelliteLayer.addMany(satGraphics);
-  orbitLayer.removeAll();
-  orbitLayer.addMany(orbitGraphics);
-  footprintLayer.removeAll();
-  footprintLayer.addMany(fpGraphics);
-
+  satelliteLayer.removeAll(); satelliteLayer.addMany(satGraphics);
+  orbitLayer.removeAll(); orbitLayer.addMany(orbitGraphics);
+  footprintLayer.removeAll(); footprintLayer.addMany(fpGraphics);
   document.getElementById("hud-sat-count").textContent = `SATELLITES: ${count}`;
-
-  if (selectedSat && selectedSat.currentPos) {
-    updateSatDetail(selectedSat);
-  }
 }
 
-function splitOrbitAtAntimeridian(path) {
-  const segments = [[]];
-  for (let i = 0; i < path.length; i++) {
-    segments[segments.length - 1].push(path[i]);
-    if (i < path.length - 1) {
-      const dlon = Math.abs(path[i + 1].longitude - path[i].longitude);
-      if (dlon > 180) {
-        segments.push([]);
-      }
-    }
-  }
-  return segments.filter(s => s.length > 1);
-}
-
-// =====================================================
-// AIRCRAFT TRACKING
-// =====================================================
+// --- Aircraft ---
 
 async function loadAircraft() {
   try {
     const resp = await fetch(CONFIG.OPENSKY_URL);
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const data = await resp.json();
-
     const states = (data.states || []).slice(0, CONFIG.MAX_AIRCRAFT);
     const graphics = [];
 
     for (const s of states) {
-      const callsign = (s[1] || "").trim();
-      const lon = s[5];
-      const lat = s[6];
-      const alt = s[7] || s[13];
-      const velocity = s[9];
-      const heading = s[10];
-      const onGround = s[8];
-
+      const lon = s[5], lat = s[6], alt = s[7] || s[13], onGround = s[8];
       if (lon == null || lat == null || onGround) continue;
-
       graphics.push(new Graphic({
-        geometry: new Point({
-          longitude: lon,
-          latitude: lat,
-          z: (alt || 10000)
-        }),
+        geometry: new Point({ longitude: lon, latitude: lat, z: alt || 10000 }),
         symbol: aircraftSymbol,
-        attributes: {
-          callsign: callsign || "N/A",
+        attributes: { type: "aircraft", callsign: (s[1] || "").trim() || "N/A",
           altitude: alt ? `${Math.round(alt)}m` : "N/A",
-          velocity: velocity ? `${Math.round(velocity)}m/s` : "N/A",
-          heading: heading != null ? `${Math.round(heading)}°` : "N/A",
-          origin: s[2] || "N/A"
-        }
+          velocity: s[9] ? `${Math.round(s[9])}m/s` : "N/A",
+          heading: s[10] != null ? `${Math.round(s[10])}°` : "N/A",
+          origin: s[2] || "N/A" }
       }));
     }
 
-    aircraftLayer.removeAll();
-    aircraftLayer.addMany(graphics);
+    aircraftLayer.removeAll(); aircraftLayer.addMany(graphics);
     document.getElementById("hud-aircraft-count").textContent = `AIRCRAFT: ${graphics.length}`;
-    logStatus(`Tracking ${graphics.length} aircraft`);
-    console.log(`[WorldView] Tracking ${graphics.length} aircraft`);
   } catch (e) {
     console.warn("[WorldView] Aircraft API failed:", e.message);
-    // Generate simulated aircraft as fallback
     loadSimulatedAircraft();
   }
 }
 
 function loadSimulatedAircraft() {
-  const graphics = [];
-  // Generate realistic-looking aircraft along major air corridors
   const corridors = [
-    // Transatlantic
     { latRange: [40, 55], lonRange: [-60, -10], count: 40, altRange: [9000, 12000] },
-    // North America
     { latRange: [25, 50], lonRange: [-125, -70], count: 60, altRange: [8000, 12000] },
-    // Europe
     { latRange: [35, 60], lonRange: [-10, 35], count: 50, altRange: [8000, 12000] },
-    // Asia
     { latRange: [10, 45], lonRange: [70, 140], count: 50, altRange: [9000, 12000] },
-    // Middle East
     { latRange: [15, 40], lonRange: [30, 60], count: 25, altRange: [9000, 11000] },
-    // South America
     { latRange: [-35, 5], lonRange: [-75, -35], count: 20, altRange: [8000, 11000] },
-    // Pacific
     { latRange: [15, 45], lonRange: [140, 180], count: 15, altRange: [10000, 12000] },
-    // Africa
     { latRange: [-20, 20], lonRange: [10, 45], count: 15, altRange: [9000, 11000] },
-    // Australia
     { latRange: [-40, -15], lonRange: [115, 155], count: 15, altRange: [9000, 11000] },
   ];
+  const prefixes = ["UAL","DAL","AAL","SWA","BAW","DLH","AFR","KLM","SIA","QFA","ANA","JAL","CCA","CSN","ETH","UAE","QTR","THY"];
+  const graphics = [];
 
-  const callsignPrefixes = ["UAL", "DAL", "AAL", "SWA", "BAW", "DLH", "AFR", "KLM", "SIA", "QFA", "ANA", "JAL", "CCA", "CSN", "CES", "ETH", "UAE", "QTR", "THY", "TAM"];
-
-  let id = 1;
   for (const c of corridors) {
     for (let i = 0; i < c.count; i++) {
       const lat = c.latRange[0] + Math.random() * (c.latRange[1] - c.latRange[0]);
       const lon = c.lonRange[0] + Math.random() * (c.lonRange[1] - c.lonRange[0]);
       const alt = c.altRange[0] + Math.random() * (c.altRange[1] - c.altRange[0]);
-      const prefix = callsignPrefixes[Math.floor(Math.random() * callsignPrefixes.length)];
-      const callsign = `${prefix}${100 + Math.floor(Math.random() * 900)}`;
-
       graphics.push(new Graphic({
         geometry: new Point({ longitude: lon, latitude: lat, z: alt }),
         symbol: aircraftSymbol,
-        attributes: {
-          callsign,
-          altitude: `${Math.round(alt)}m`,
-          velocity: `${220 + Math.floor(Math.random() * 60)}m/s`,
-          heading: `${Math.floor(Math.random() * 360)}°`,
-          origin: "SIM"
-        }
+        attributes: { type: "aircraft",
+          callsign: `${prefixes[Math.floor(Math.random() * prefixes.length)]}${100 + Math.floor(Math.random() * 900)}`,
+          altitude: `${Math.round(alt)}m`, velocity: `${220 + Math.floor(Math.random() * 60)}m/s`,
+          heading: `${Math.floor(Math.random() * 360)}°`, origin: "SIM" }
       }));
-      id++;
     }
   }
 
-  aircraftLayer.removeAll();
-  aircraftLayer.addMany(graphics);
+  aircraftLayer.removeAll(); aircraftLayer.addMany(graphics);
   document.getElementById("hud-aircraft-count").textContent = `AIRCRAFT: ${graphics.length} (SIM)`;
-  logStatus(`Simulated ${graphics.length} aircraft (API offline)`);
-  console.log(`[WorldView] Simulated ${graphics.length} aircraft (OpenSky offline)`);
+}
+
+// --- Earthquakes ---
+
+async function loadEarthquakes() {
+  try {
+    const resp = await fetch(CONFIG.USGS_QUAKE_URL);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const data = await resp.json();
+    const graphics = [];
+
+    for (const f of data.features) {
+      const [lon, lat, depth] = f.geometry.coordinates;
+      const mag = f.properties.mag;
+      const place = f.properties.place || "Unknown";
+      const time = new Date(f.properties.time).toISOString().replace("T", " ").substring(0, 19);
+
+      if (lon == null || lat == null || mag == null) continue;
+
+      graphics.push(new Graphic({
+        geometry: new Point({ longitude: lon, latitude: lat }),
+        symbol: quakeSymbol(mag),
+        attributes: { type: "earthquake", name: place, magnitude: mag.toFixed(1),
+          depth: `${(depth || 0).toFixed(1)} km`, time, lat: lat.toFixed(4), lon: lon.toFixed(4) }
+      }));
+    }
+
+    earthquakeLayer.removeAll(); earthquakeLayer.addMany(graphics);
+    document.getElementById("hud-quake-count").textContent = `EARTHQUAKES: ${graphics.length}`;
+    console.log(`[WorldView] ${graphics.length} earthquakes loaded`);
+  } catch (e) {
+    console.warn("[WorldView] Earthquake fetch failed:", e.message);
+    document.getElementById("hud-quake-count").textContent = "EARTHQUAKES: OFFLINE";
+  }
+}
+
+// --- NASA EONET Events ---
+
+async function loadNasaEvents() {
+  try {
+    const resp = await fetch(CONFIG.NASA_EONET_URL);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const data = await resp.json();
+    const graphics = [];
+
+    for (const event of data.events) {
+      const cat = event.categories?.[0]?.title || "Unknown";
+      const geom = event.geometry?.[0];
+      if (!geom || geom.type !== "Point") continue;
+
+      const [lon, lat] = geom.coordinates;
+      const date = geom.date ? new Date(geom.date).toISOString().replace("T", " ").substring(0, 19) : "N/A";
+      const magVal = geom.magnitudeValue;
+      const magUnit = geom.magnitudeUnit;
+
+      graphics.push(new Graphic({
+        geometry: new Point({ longitude: lon, latitude: lat }),
+        symbol: nasaEventSymbol(cat),
+        attributes: { type: "nasa_event", name: event.title, category: cat,
+          date, magnitude: magVal ? `${magVal} ${magUnit || ""}` : "N/A",
+          lat: lat.toFixed(4), lon: lon.toFixed(4) }
+      }));
+    }
+
+    nasaEventLayer.removeAll(); nasaEventLayer.addMany(graphics);
+    document.getElementById("hud-event-count").textContent = `NASA EVENTS: ${graphics.length}`;
+    console.log(`[WorldView] ${graphics.length} NASA events loaded`);
+  } catch (e) {
+    console.warn("[WorldView] NASA EONET fetch failed:", e.message);
+    document.getElementById("hud-event-count").textContent = "NASA EVENTS: OFFLINE";
+  }
+}
+
+// --- ArcGIS FeatureLayer counts ---
+
+async function updateFeatureLayerCounts() {
+  try {
+    const cableView = await cableLayer.queryFeatureCount();
+    document.getElementById("hud-cable-count").textContent = `SUB CABLES: ${cableView}`;
+  } catch {
+    document.getElementById("hud-cable-count").textContent = "SUB CABLES: OFFLINE";
+  }
+  try {
+    const baseView = await militaryLayer.queryFeatureCount();
+    document.getElementById("hud-base-count").textContent = `MIL BASES: ${baseView}`;
+  } catch {
+    document.getElementById("hud-base-count").textContent = "MIL BASES: OFFLINE";
+  }
 }
 
 // =====================================================
-// HUD UPDATES
+// HUD
 // =====================================================
 
 function updateHUD() {
   const now = new Date();
-  const utc = now.toISOString().replace("T", " ").substring(0, 19) + " UTC";
-  document.getElementById("hud-clock").textContent = utc;
+  document.getElementById("hud-clock").textContent =
+    now.toISOString().replace("T", " ").substring(0, 19) + " UTC";
 
   if (view.camera) {
     const cam = view.camera;
@@ -542,22 +609,10 @@ function updateHUD() {
   }
 }
 
-function formatAlt(meters) {
-  if (meters > 1000000) return `${(meters / 1000000).toFixed(1)}M km`;
-  if (meters > 1000) return `${(meters / 1000).toFixed(1)} km`;
-  return `${Math.round(meters)} m`;
-}
-
-function updateSatDetail(sat) {
-  const panel = document.getElementById("sat-detail");
-  panel.classList.remove("hidden");
-  const p = sat.currentPos;
-  document.getElementById("sat-detail-name").textContent = sat.name;
-  document.getElementById("sat-detail-id").textContent = `NORAD: ${sat.noradId}`;
-  document.getElementById("sat-detail-lat").textContent = `LAT: ${p.latitude.toFixed(4)}°`;
-  document.getElementById("sat-detail-lon").textContent = `LON: ${p.longitude.toFixed(4)}°`;
-  document.getElementById("sat-detail-alt").textContent = `ALT: ${(p.altitude / 1000).toFixed(1)} km`;
-  document.getElementById("sat-detail-vel").textContent = `VEL: ${p.velocity.toFixed(2)} km/s`;
+function formatAlt(m) {
+  if (m > 1e6) return `${(m / 1e6).toFixed(1)}M km`;
+  if (m > 1000) return `${(m / 1000).toFixed(1)} km`;
+  return `${Math.round(m)} m`;
 }
 
 function logStatus(msg) {
@@ -565,11 +620,88 @@ function logStatus(msg) {
   if (el) el.textContent = msg;
 }
 
+function setLoadingText(msg) {
+  const el = document.getElementById("loading-text");
+  if (el) el.textContent = msg;
+}
+
+function setLoadingProgress(pct) {
+  const el = document.getElementById("loading-bar");
+  if (el) el.style.width = `${pct}%`;
+}
+
+// =====================================================
+// FEATURE DETAIL PANEL
+// =====================================================
+
+function showFeatureDetail(attrs) {
+  const panel = document.getElementById("feature-detail");
+  const body = document.getElementById("feature-detail-body");
+  const label = document.getElementById("feature-detail-label");
+  panel.classList.remove("hidden");
+
+  const typeLabels = {
+    satellite: "SATELLITE TELEMETRY",
+    aircraft: "AIRCRAFT TRACKING",
+    earthquake: "SEISMIC EVENT",
+    nasa_event: "NATURAL EVENT",
+    military: "MILITARY INSTALLATION",
+    cable: "SUBMARINE CABLE"
+  };
+
+  label.textContent = typeLabels[attrs.type] || "TARGET INFO";
+
+  let html = `<div class="detail-name">${attrs.name || attrs.featureName || attrs.Name || "UNKNOWN"}</div>`;
+
+  if (attrs.type === "satellite") {
+    html += detailRow("NORAD", attrs.noradId);
+    html += detailRow("LAT", `${attrs.lat}°`);
+    html += detailRow("LON", `${attrs.lon}°`);
+    html += detailRow("ALT", `${attrs.alt} km`);
+    html += detailRow("VEL", `${attrs.vel} km/s`);
+  } else if (attrs.type === "aircraft") {
+    html += detailRow("CALLSIGN", attrs.callsign);
+    html += detailRow("ALT", attrs.altitude);
+    html += detailRow("SPEED", attrs.velocity);
+    html += detailRow("HDG", attrs.heading);
+    html += detailRow("ORIGIN", attrs.origin);
+  } else if (attrs.type === "earthquake") {
+    html += detailRow("MAG", `M${attrs.magnitude}`);
+    html += detailRow("DEPTH", attrs.depth);
+    html += detailRow("TIME", attrs.time);
+    html += detailRow("LAT", `${attrs.lat}°`);
+    html += detailRow("LON", `${attrs.lon}°`);
+  } else if (attrs.type === "nasa_event") {
+    html += detailRow("CATEGORY", attrs.category);
+    html += detailRow("DATE", attrs.date);
+    html += detailRow("MAGNITUDE", attrs.magnitude);
+    html += detailRow("LAT", `${attrs.lat}°`);
+    html += detailRow("LON", `${attrs.lon}°`);
+  } else {
+    // Generic — show all attributes
+    for (const [k, v] of Object.entries(attrs)) {
+      if (k === "type" || k === "OBJECTID" || k === "FID" || v === "na" || v == null) continue;
+      html += detailRow(k.toUpperCase().replace(/_/g, " "), v);
+    }
+  }
+
+  body.innerHTML = html;
+}
+
+function detailRow(label, value) {
+  return `<div class="detail-row"><strong>${label}:</strong> ${value}</div>`;
+}
+
+function hideFeatureDetail() {
+  document.getElementById("feature-detail").classList.add("hidden");
+  selectedFeature = null;
+}
+
 // =====================================================
 // EVENT HANDLERS
 // =====================================================
 
-// Render mode buttons
+// Render modes
 document.querySelectorAll("[data-mode]").forEach(btn => {
   btn.addEventListener("click", () => {
     document.querySelectorAll("[data-mode]").forEach(b => b.classList.remove("active"));
@@ -579,25 +711,35 @@ document.querySelectorAll("[data-mode]").forEach(btn => {
 });
 
 // Layer toggles
-document.getElementById("toggle-satellites").addEventListener("change", e => {
-  satelliteLayer.visible = e.target.checked;
-});
-document.getElementById("toggle-orbits").addEventListener("change", e => {
-  orbitLayer.visible = e.target.checked;
-});
-document.getElementById("toggle-footprints").addEventListener("change", e => {
-  footprintLayer.visible = e.target.checked;
-});
-document.getElementById("toggle-aircraft").addEventListener("change", e => {
-  aircraftLayer.visible = e.target.checked;
-});
+const layerMap = {
+  "toggle-satellites": satelliteLayer,
+  "toggle-orbits": orbitLayer,
+  "toggle-footprints": footprintLayer,
+  "toggle-aircraft": aircraftLayer,
+  "toggle-earthquakes": earthquakeLayer,
+  "toggle-events": nasaEventLayer,
+  "toggle-cables": [cableLayer, cableTerminalLayer],
+  "toggle-bases": militaryLayer,
+};
 
-// Go-to buttons
+for (const [id, layers] of Object.entries(layerMap)) {
+  document.getElementById(id)?.addEventListener("change", e => {
+    if (Array.isArray(layers)) {
+      layers.forEach(l => l.visible = e.target.checked);
+    } else {
+      layers.visible = e.target.checked;
+    }
+  });
+}
+
+// Go-to
 const goToTargets = {
   globe: { position: { longitude: -10, latitude: 20, z: 25000000 }, heading: 0, tilt: 0 },
-  usa: { position: { longitude: -98, latitude: 38, z: 8000000 }, heading: 0, tilt: 15 },
-  europe: { position: { longitude: 10, latitude: 48, z: 6000000 }, heading: 0, tilt: 15 },
-  asia: { position: { longitude: 105, latitude: 30, z: 8000000 }, heading: 0, tilt: 15 }
+  usa: { position: { longitude: -98, latitude: 38, z: 5000000 }, heading: 0, tilt: 20 },
+  europe: { position: { longitude: 10, latitude: 48, z: 5000000 }, heading: 0, tilt: 20 },
+  asia: { position: { longitude: 105, latitude: 30, z: 6000000 }, heading: 0, tilt: 20 },
+  mideast: { position: { longitude: 45, latitude: 28, z: 4000000 }, heading: 0, tilt: 25 },
+  pacific: { position: { longitude: 170, latitude: 10, z: 8000000 }, heading: 0, tilt: 10 },
 };
 
 document.querySelectorAll(".goto-btn").forEach(btn => {
@@ -607,34 +749,78 @@ document.querySelectorAll(".goto-btn").forEach(btn => {
   });
 });
 
-// Click on satellite
+// Click to select features
 view.on("click", async (event) => {
   const resp = await view.hitTest(event);
-  const result = resp.results.find(r => r.graphic?.layer === satelliteLayer);
-  if (result) {
-    const attrs = result.graphic.attributes;
-    selectedSat = satData.find(s => s.noradId === attrs.noradId) || null;
-    if (selectedSat) {
+
+  // Check GraphicsLayers first (satellites, aircraft, earthquakes, nasa events)
+  for (const r of resp.results) {
+    if (!r.graphic?.attributes) continue;
+    const attrs = r.graphic.attributes;
+
+    if (r.graphic.layer === satelliteLayer) {
+      selectedFeature = { type: "satellite", id: attrs.noradId };
+      showFeatureDetail(attrs);
       updateSatellites();
-      view.goTo({
-        target: result.graphic.geometry,
-        heading: view.camera.heading,
-        tilt: 45,
-        zoom: 4
-      }, { duration: 1500 });
+      return;
     }
-  } else if (selectedSat) {
-    selectedSat = null;
-    document.getElementById("sat-detail").classList.add("hidden");
+    if (r.graphic.layer === aircraftLayer) {
+      showFeatureDetail(attrs);
+      return;
+    }
+    if (r.graphic.layer === earthquakeLayer) {
+      showFeatureDetail(attrs);
+      return;
+    }
+    if (r.graphic.layer === nasaEventLayer) {
+      showFeatureDetail(attrs);
+      return;
+    }
+  }
+
+  // Check FeatureLayers (military, cables)
+  for (const r of resp.results) {
+    if (!r.graphic?.attributes) continue;
+    const attrs = r.graphic.attributes;
+
+    if (r.graphic.layer === militaryLayer) {
+      showFeatureDetail({ ...attrs, type: "military", name: attrs.featureName });
+      return;
+    }
+    if (r.graphic.layer === cableLayer || r.graphic.layer === cableTerminalLayer) {
+      showFeatureDetail({ ...attrs, type: "cable", name: attrs.Name || attrs.name });
+      return;
+    }
+  }
+
+  // Nothing hit — deselect
+  if (selectedFeature) {
+    selectedFeature = null;
     updateSatellites();
   }
+  hideFeatureDetail();
 });
 
-// Dismiss satellite detail
-document.getElementById("sat-detail-close").addEventListener("click", () => {
-  selectedSat = null;
-  document.getElementById("sat-detail").classList.add("hidden");
-  updateSatellites();
+// Dismiss detail
+document.getElementById("feature-detail-close").addEventListener("click", () => {
+  if (selectedFeature?.type === "satellite") {
+    selectedFeature = null;
+    updateSatellites();
+  }
+  hideFeatureDetail();
+});
+
+// =====================================================
+// INTRO MODAL
+// =====================================================
+
+document.getElementById("intro-launch").addEventListener("click", () => {
+  const modal = document.getElementById("intro-modal");
+  modal.classList.add("closing");
+  setTimeout(() => {
+    modal.style.display = "none";
+    document.getElementById("hud-overlay").classList.remove("hidden");
+  }, 600);
 });
 
 // =====================================================
@@ -643,25 +829,49 @@ document.getElementById("sat-detail-close").addEventListener("click", () => {
 
 async function init() {
   console.log("[WorldView] Initializing...");
-  logStatus("Initializing SceneView...");
 
-  await view.when();
-  console.log("[WorldView] SceneView ready");
-  logStatus("SceneView ready");
-
-  // Start HUD clock
+  // Start HUD clock immediately
   setInterval(updateHUD, 250);
   updateHUD();
 
-  // Load satellites
-  await loadSatellites();
+  // Wait for view, but don't block data loading forever
+  const viewReady = view.when().then(() => {
+    console.log("[WorldView] SceneView ready");
+  }).catch(e => {
+    console.warn("[WorldView] SceneView init issue:", e.message);
+  });
 
-  // Update satellite positions periodically
+  // Load all data feeds in parallel (don't wait for view)
+  setLoadingProgress(5);
+  setLoadingText("Loading satellite data...");
+  const satPromise = loadSatellites().then(() => { setLoadingProgress(25); });
+
+  setLoadingText("Loading all data feeds...");
+  const [, , , ,] = await Promise.allSettled([
+    satPromise,
+    loadAircraft().then(() => { setLoadingProgress(45); }),
+    loadEarthquakes().then(() => { setLoadingProgress(60); }),
+    loadNasaEvents().then(() => { setLoadingProgress(75); }),
+  ]);
+
+  setLoadingText("Loading infrastructure layers...");
+  await updateFeatureLayerCounts();
+  setLoadingProgress(90);
+
+  // Wait for view to be ready (with timeout)
+  await Promise.race([viewReady, new Promise(r => setTimeout(r, 10000))]);
+  setLoadingProgress(100);
+
+  // Hide loading overlay
+  setTimeout(() => {
+    const loadEl = document.getElementById("loading-overlay");
+    if (loadEl) loadEl.classList.add("done");
+  }, 500);
+
+  // Set up periodic refreshes
   setInterval(updateSatellites, CONFIG.SAT_UPDATE_INTERVAL);
-
-  // Load aircraft
-  await loadAircraft();
   setInterval(loadAircraft, CONFIG.AIRCRAFT_UPDATE_INTERVAL);
+  setInterval(loadEarthquakes, CONFIG.QUAKE_UPDATE_INTERVAL);
 
   logStatus("All systems operational");
   console.log("[WorldView] All systems operational");
