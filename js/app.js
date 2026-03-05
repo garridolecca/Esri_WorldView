@@ -187,26 +187,56 @@ async function geocodeCity(query) {
 
 async function flyToCity(lat, lon, name) {
   logStatus(`Flying to ${name}...`);
+  console.log(`[WorldView] flyToCity: ${name} (${lat}, ${lon})`);
 
-  // Switch to city basemap and show buildings
-  map.basemap = CITY_BASEMAP;
+  // Show buildings and city layers
   buildingsLayer.visible = true;
   cctvLayer.visible = true;
   urbanPOILayer.visible = true;
   isCityView = true;
   updateCityViewIndicator();
 
-  await view.goTo({
-    position: { longitude: lon, latitude: lat, z: CITY_VIEW_ALT },
-    heading: 30,
-    tilt: CITY_VIEW_TILT
-  }, { duration: 3000, easing: "ease-in-out" });
+  try {
+    // Step 1: Zoom to region (fast approach)
+    await view.goTo({
+      position: { longitude: lon, latitude: lat, z: 50000 },
+      heading: 0,
+      tilt: 30
+    }, { duration: 1500, easing: "ease-in-out" });
+
+    // Step 2: Switch basemap after arriving near the city
+    map.basemap = CITY_BASEMAP;
+
+    // Step 3: Zoom to street level with tilt for 3D buildings
+    await view.goTo({
+      position: { longitude: lon, latitude: lat, z: CITY_VIEW_ALT },
+      heading: 30,
+      tilt: CITY_VIEW_TILT
+    }, { duration: 2000, easing: "ease-in-out" });
+    console.log("[WorldView] flyToCity: goTo completed");
+  } catch (e) {
+    console.warn("[WorldView] flyToCity goTo issue:", e.message);
+    // Fallback: set camera and basemap directly
+    map.basemap = CITY_BASEMAP;
+    try {
+      view.camera = {
+        position: { longitude: lon, latitude: lat, z: CITY_VIEW_ALT },
+        heading: 30,
+        tilt: CITY_VIEW_TILT
+      };
+    } catch (e2) {
+      console.warn("[WorldView] flyToCity camera fallback failed:", e2.message);
+    }
+  }
 
   logStatus(`Viewing ${name} — Loading city data...`);
   loadCityData(lat, lon);
 }
 
-function returnToGlobe() {
+async function returnToGlobe() {
+  logStatus("Returning to globe...");
+  console.log("[WorldView] returnToGlobe");
+
   map.basemap = GLOBE_BASEMAP;
   buildingsLayer.visible = false;
   cctvLayer.removeAll();
@@ -218,11 +248,18 @@ function returnToGlobe() {
   document.getElementById("hud-cctv-count").textContent = "CCTV: --";
   document.getElementById("hud-poi-count").textContent = "URBAN POI: --";
 
-  view.goTo({
-    position: { longitude: view.camera.position.longitude, latitude: view.camera.position.latitude, z: 25000000 },
+  const globeCamera = {
+    position: { longitude: -10, latitude: 20, z: 25000000 },
     heading: 0,
     tilt: 0
-  }, { duration: 2500, easing: "ease-in-out" });
+  };
+
+  try {
+    await view.goTo(globeCamera, { duration: 2500, easing: "ease-in-out" });
+  } catch (e) {
+    console.warn("[WorldView] returnToGlobe goTo issue:", e.message);
+    try { view.camera = globeCamera; } catch (e2) { /* ignore */ }
+  }
 
   logStatus("All systems operational");
 }
@@ -419,37 +456,46 @@ function initSearchBar() {
         results.classList.remove("hidden");
         return;
       }
-      results.innerHTML = places.map((p, i) => {
+      results.innerHTML = "";
+      places.forEach((p, i) => {
         const display = p.display_name.length > 60
           ? p.display_name.substring(0, 57) + "..."
           : p.display_name;
         const type = p.type || p.class || "";
-        return `<div class="search-result-item" data-idx="${i}" data-lat="${p.lat}" data-lon="${p.lon}" data-name="${p.display_name.split(",")[0]}">
-          <span class="search-result-name">${display}</span>
-          <span class="search-result-type">${type}</span>
-        </div>`;
-      }).join("");
+        const lat = parseFloat(p.lat);
+        const lon = parseFloat(p.lon);
+        const name = p.display_name.split(",")[0];
+
+        const div = document.createElement("div");
+        div.className = "search-result-item";
+        div.dataset.lat = lat;
+        div.dataset.lon = lon;
+        div.dataset.name = name;
+        div.innerHTML = `<span class="search-result-name">${display}</span>
+          <span class="search-result-type">${type}</span>`;
+
+        // Attach click handler directly to each item
+        function selectCity(e) {
+          e.stopPropagation();
+          e.preventDefault();
+          console.log(`[WorldView] Search selected: ${name} (${lat}, ${lon})`);
+          input.value = name;
+          results.classList.add("hidden");
+          flyToCity(lat, lon, name);
+        }
+
+        div.addEventListener("mousedown", selectCity);
+        div.addEventListener("click", selectCity);
+        results.appendChild(div);
+      });
       results.classList.remove("hidden");
     }, 400);
   });
 
-  // Use mousedown instead of click to prevent ArcGIS SceneView from intercepting
-  results.addEventListener("mousedown", (e) => {
-    const item = e.target.closest(".search-result-item");
-    if (!item || !item.dataset.lat) return;
-    e.stopPropagation();
-    e.preventDefault();
-    const lat = parseFloat(item.dataset.lat);
-    const lon = parseFloat(item.dataset.lon);
-    const name = item.dataset.name;
-    input.value = name;
-    results.classList.add("hidden");
-    flyToCity(lat, lon, name);
-  });
-
-  // Stop all pointer events on search results from reaching SceneView
-  results.addEventListener("pointerdown", (e) => e.stopPropagation());
-  results.addEventListener("click", (e) => e.stopPropagation());
+  // Stop pointer events on search results from reaching SceneView
+  for (const evt of ["mousedown", "pointerdown", "click", "touchstart"]) {
+    results.addEventListener(evt, (e) => e.stopPropagation());
+  }
 
   // Enter key — fly to first result
   input.addEventListener("keydown", (e) => {
@@ -477,8 +523,12 @@ function initSearchBar() {
     }
   });
 
-  // Return to globe button
-  document.getElementById("btn-return-globe")?.addEventListener("click", returnToGlobe);
+  // Return to globe button — use both click and mousedown for reliability
+  const globeBtn = document.getElementById("btn-return-globe");
+  if (globeBtn) {
+    globeBtn.addEventListener("click", (e) => { e.stopPropagation(); returnToGlobe(); });
+    globeBtn.addEventListener("mousedown", (e) => { e.stopPropagation(); });
+  }
 }
 
 // =====================================================
