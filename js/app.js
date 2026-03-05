@@ -4,18 +4,20 @@
 // =====================================================
 
 const [
-  Map, SceneView, GraphicsLayer, FeatureLayer, Graphic,
+  Map, SceneView, GraphicsLayer, FeatureLayer, SceneLayer, Graphic,
   Point, Polyline, Polygon,
   PointSymbol3D, IconSymbol3DLayer,
   LineSymbol3D, LineSymbol3DLayer,
   PolygonSymbol3D, FillSymbol3DLayer,
   SimpleRenderer, UniqueValueRenderer,
-  SimpleLineSymbol, SimpleMarkerSymbol
+  SimpleLineSymbol, SimpleMarkerSymbol,
+  Basemap
 ] = await $arcgis.import([
   "@arcgis/core/Map.js",
   "@arcgis/core/views/SceneView.js",
   "@arcgis/core/layers/GraphicsLayer.js",
   "@arcgis/core/layers/FeatureLayer.js",
+  "@arcgis/core/layers/SceneLayer.js",
   "@arcgis/core/Graphic.js",
   "@arcgis/core/geometry/Point.js",
   "@arcgis/core/geometry/Polyline.js",
@@ -29,7 +31,8 @@ const [
   "@arcgis/core/renderers/SimpleRenderer.js",
   "@arcgis/core/renderers/UniqueValueRenderer.js",
   "@arcgis/core/symbols/SimpleLineSymbol.js",
-  "@arcgis/core/symbols/SimpleMarkerSymbol.js"
+  "@arcgis/core/symbols/SimpleMarkerSymbol.js",
+  "@arcgis/core/Basemap.js"
 ]);
 
 const satelliteJs = window.satellite;
@@ -148,6 +151,168 @@ const view = new SceneView({
   ui: { components: [] },
   popup: { autoOpenEnabled: false }
 });
+
+// =====================================================
+// 3D BUILDINGS & CITY SEARCH
+// =====================================================
+
+const buildingsLayer = new SceneLayer({
+  url: "https://basemaps3d.arcgis.com/arcgis/rest/services/OpenStreetMap3D_Buildings_v1/SceneServer",
+  title: "3D Buildings",
+  visible: false
+});
+map.add(buildingsLayer);
+
+let isCityView = false;
+const CITY_VIEW_ALT = 800;   // meters — street-level fly-in altitude
+const CITY_VIEW_TILT = 70;   // degrees — tilted perspective for buildings
+const GLOBE_BASEMAP = "satellite";
+const CITY_BASEMAP = "dark-gray-vector";
+
+// Geocode via Nominatim (OpenStreetMap — free, no API key)
+async function geocodeCity(query) {
+  const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=6&addressdetails=1`;
+  try {
+    const resp = await fetch(url, { headers: { "Accept-Language": "en" } });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    return await resp.json();
+  } catch (e) {
+    console.warn("[WorldView] Geocode failed:", e.message);
+    return [];
+  }
+}
+
+async function flyToCity(lat, lon, name) {
+  logStatus(`Flying to ${name}...`);
+
+  // Switch to city basemap and show buildings
+  map.basemap = CITY_BASEMAP;
+  buildingsLayer.visible = true;
+  isCityView = true;
+  updateCityViewIndicator();
+
+  await view.goTo({
+    position: { longitude: lon, latitude: lat, z: CITY_VIEW_ALT },
+    heading: 30,
+    tilt: CITY_VIEW_TILT
+  }, { duration: 3000, easing: "ease-in-out" });
+
+  logStatus(`Viewing ${name} — 3D Buildings active`);
+}
+
+function returnToGlobe() {
+  map.basemap = GLOBE_BASEMAP;
+  buildingsLayer.visible = false;
+  isCityView = false;
+  updateCityViewIndicator();
+
+  view.goTo({
+    position: { longitude: view.camera.position.longitude, latitude: view.camera.position.latitude, z: 25000000 },
+    heading: 0,
+    tilt: 0
+  }, { duration: 2500, easing: "ease-in-out" });
+
+  logStatus("All systems operational");
+}
+
+function updateCityViewIndicator() {
+  const btn = document.getElementById("btn-return-globe");
+  if (btn) btn.classList.toggle("hidden", !isCityView);
+}
+
+// Watch camera altitude to auto-switch basemap
+let basemapDebounce = null;
+function watchCameraAltitude() {
+  if (!view.camera) return;
+  const alt = view.camera.position.z;
+
+  clearTimeout(basemapDebounce);
+  basemapDebounce = setTimeout(() => {
+    if (alt < 50000 && !isCityView) {
+      // Zoomed in close — switch to city basemap + buildings
+      map.basemap = CITY_BASEMAP;
+      buildingsLayer.visible = true;
+      isCityView = true;
+      updateCityViewIndicator();
+    } else if (alt > 200000 && isCityView) {
+      // Zoomed back out — return to satellite
+      map.basemap = GLOBE_BASEMAP;
+      buildingsLayer.visible = false;
+      isCityView = false;
+      updateCityViewIndicator();
+    }
+  }, 300);
+}
+
+// Search bar logic
+function initSearchBar() {
+  const input = document.getElementById("search-input");
+  const results = document.getElementById("search-results");
+  let debounceTimer = null;
+
+  input.addEventListener("input", () => {
+    clearTimeout(debounceTimer);
+    const query = input.value.trim();
+    if (query.length < 2) {
+      results.classList.add("hidden");
+      return;
+    }
+    debounceTimer = setTimeout(async () => {
+      const places = await geocodeCity(query);
+      if (places.length === 0) {
+        results.innerHTML = '<div class="search-result-item">No results found</div>';
+        results.classList.remove("hidden");
+        return;
+      }
+      results.innerHTML = places.map((p, i) => {
+        const display = p.display_name.length > 60
+          ? p.display_name.substring(0, 57) + "..."
+          : p.display_name;
+        const type = p.type || p.class || "";
+        return `<div class="search-result-item" data-idx="${i}" data-lat="${p.lat}" data-lon="${p.lon}" data-name="${p.display_name.split(",")[0]}">
+          <span class="search-result-name">${display}</span>
+          <span class="search-result-type">${type}</span>
+        </div>`;
+      }).join("");
+      results.classList.remove("hidden");
+    }, 400);
+  });
+
+  results.addEventListener("click", (e) => {
+    const item = e.target.closest(".search-result-item");
+    if (!item || !item.dataset.lat) return;
+    const lat = parseFloat(item.dataset.lat);
+    const lon = parseFloat(item.dataset.lon);
+    const name = item.dataset.name;
+    input.value = name;
+    results.classList.add("hidden");
+    flyToCity(lat, lon, name);
+  });
+
+  // Enter key — fly to first result
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      const first = results.querySelector(".search-result-item[data-lat]");
+      if (first) {
+        first.click();
+      }
+    }
+    if (e.key === "Escape") {
+      results.classList.add("hidden");
+      input.blur();
+    }
+  });
+
+  // Close results on outside click
+  document.addEventListener("click", (e) => {
+    if (!e.target.closest("#search-container")) {
+      results.classList.add("hidden");
+    }
+  });
+
+  // Return to globe button
+  document.getElementById("btn-return-globe")?.addEventListener("click", returnToGlobe);
+}
 
 // =====================================================
 // SYMBOLS
@@ -606,6 +771,7 @@ function updateHUD() {
     document.getElementById("hud-alt").textContent = `ALT: ${formatAlt(cam.position.z)}`;
     document.getElementById("hud-heading").textContent = `HDG: ${cam.heading.toFixed(1)}°`;
     document.getElementById("hud-tilt").textContent = `TILT: ${cam.tilt.toFixed(1)}°`;
+    watchCameraAltitude();
   }
 }
 
@@ -830,9 +996,10 @@ document.getElementById("intro-launch").addEventListener("click", () => {
 async function init() {
   console.log("[WorldView] Initializing...");
 
-  // Start HUD clock immediately
+  // Start HUD clock and search bar
   setInterval(updateHUD, 250);
   updateHUD();
+  initSearchBar();
 
   // Wait for view, but don't block data loading forever
   const viewReady = view.when().then(() => {

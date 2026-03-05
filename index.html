@@ -47,6 +47,7 @@
               <li><strong>Click feature</strong> &mdash; View details</li>
               <li><strong>Render modes</strong> &mdash; NVG / Thermal / CRT</li>
               <li><strong>Layer toggles</strong> &mdash; Show/hide datasets</li>
+              <li><strong>Search bar</strong> &mdash; Fly to any city in 3D</li>
             </ul>
           </div>
         </div>
@@ -75,6 +76,11 @@
     <!-- Top Bar -->
     <div id="hud-top-bar">
       <div id="hud-title">ESRI WORLDVIEW <span class="hud-subtitle">// INTELLIGENCE SIMULATOR</span></div>
+      <div id="search-container">
+        <input type="text" id="search-input" placeholder="SEARCH CITY..." autocomplete="off" spellcheck="false" />
+        <button id="btn-return-globe" class="hud-btn hidden" title="Return to globe view">GLOBE VIEW</button>
+        <div id="search-results" class="hidden"></div>
+      </div>
       <div id="hud-clock"></div>
     </div>
 
