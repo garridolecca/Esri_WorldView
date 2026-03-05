@@ -10,11 +10,12 @@ A browser-based global intelligence visualization built with the **ArcGIS Maps S
 
 ## Features
 
-### 6 Real-Time Data Feeds
+### 7 Real-Time Data Feeds
 
 | Layer | Source | Data | Update |
 |-------|--------|------|--------|
 | Satellites | [CelesTrak](https://celestrak.org/) + [satellite.js](https://github.com/shashwatak/satellite-js) | 200+ satellites with SGP4 orbital propagation | 2s |
+| SpaceX Starlink | [CelesTrak](https://celestrak.org/) constellation | 200 Starlink LEO satellites with distinct blue symbology | 2s |
 | Aircraft | [OpenSky Network](https://opensky-network.org/) | 500+ live ADS-B positions with callsign, altitude, speed | 15s |
 | Earthquakes | [USGS](https://earthquake.usgs.gov/) | M2.5+ seismic events (last 24h), magnitude-scaled | 60s |
 | Natural Events | [NASA EONET](https://eonet.gsfc.nasa.gov/) | Wildfires, volcanoes, storms, floods, icebergs | On load |

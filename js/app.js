@@ -3,13 +3,13 @@
 // ArcGIS Maps SDK for JavaScript 5.0
 // =====================================================
 
+
 const [
   Map, SceneView, GraphicsLayer, FeatureLayer, SceneLayer, Graphic,
   Point, Polyline, Polygon,
   PointSymbol3D, IconSymbol3DLayer,
   LineSymbol3D, LineSymbol3DLayer,
   PolygonSymbol3D, FillSymbol3DLayer,
-  MeshSymbol3D, FillSymbol3DLayerMesh,
   SimpleRenderer, UniqueValueRenderer,
   SimpleLineSymbol, SimpleMarkerSymbol,
   Basemap
@@ -29,8 +29,6 @@ const [
   "@arcgis/core/symbols/LineSymbol3DLayer.js",
   "@arcgis/core/symbols/PolygonSymbol3D.js",
   "@arcgis/core/symbols/FillSymbol3DLayer.js",
-  "@arcgis/core/symbols/MeshSymbol3D.js",
-  "@arcgis/core/symbols/FillSymbol3DLayer.js",
   "@arcgis/core/renderers/SimpleRenderer.js",
   "@arcgis/core/renderers/UniqueValueRenderer.js",
   "@arcgis/core/symbols/SimpleLineSymbol.js",
@@ -49,6 +47,7 @@ const CONFIG = {
   TLE_STATIONS_URL: "https://celestrak.org/NORAD/elements/gp.php?GROUP=stations&FORMAT=tle",
   TLE_VISUAL_URL: "https://celestrak.org/NORAD/elements/gp.php?GROUP=visual&FORMAT=tle",
   TLE_SCIENCE_URL: "https://celestrak.org/NORAD/elements/gp.php?GROUP=science&FORMAT=tle",
+  TLE_STARLINK_URL: "https://celestrak.org/NORAD/elements/gp.php?GROUP=starlink&FORMAT=tle",
   OPENSKY_URL: "https://opensky-network.org/api/states/all",
   USGS_QUAKE_URL: "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/2.5_day.geojson",
   NASA_EONET_URL: "https://eonet.gsfc.nasa.gov/api/v3/events?status=open&limit=150",
@@ -58,6 +57,7 @@ const CONFIG = {
   AIRCRAFT_UPDATE_INTERVAL: 15000,
   QUAKE_UPDATE_INTERVAL: 60000,
   MAX_SATELLITES: 250,
+  MAX_STARLINK: 200,
   MAX_AIRCRAFT: 600,
   ORBIT_POINTS: 180,
   FOOTPRINT_SEGMENTS: 36,
@@ -69,12 +69,15 @@ const CONFIG = {
 
 const satelliteLayer = new GraphicsLayer({ title: "Satellites", elevationInfo: { mode: "absolute-height" } });
 const orbitLayer = new GraphicsLayer({ title: "Orbits", elevationInfo: { mode: "absolute-height" } });
-const footprintLayer = new GraphicsLayer({ title: "Footprints" });
-const aircraftLayer = new GraphicsLayer({ title: "Aircraft", elevationInfo: { mode: "absolute-height" } });
-const earthquakeLayer = new GraphicsLayer({ title: "Earthquakes" });
-const nasaEventLayer = new GraphicsLayer({ title: "NASA Events" });
+const footprintLayer = new GraphicsLayer({ title: "Footprints", visible: false });
+const starlinkLayer = new GraphicsLayer({ title: "Starlink", elevationInfo: { mode: "absolute-height" } });
+const starlinkOrbitLayer = new GraphicsLayer({ title: "Starlink Orbits", elevationInfo: { mode: "absolute-height" } });
+const aircraftLayer = new GraphicsLayer({ title: "Aircraft", elevationInfo: { mode: "absolute-height" }, visible: false });
+const earthquakeLayer = new GraphicsLayer({ title: "Earthquakes", visible: false });
+const nasaEventLayer = new GraphicsLayer({ title: "NASA Events", visible: false });
 const cctvLayer = new GraphicsLayer({ title: "CCTV Cameras" });
 const urbanPOILayer = new GraphicsLayer({ title: "Urban POIs" });
+const viewshedLayer = new GraphicsLayer({ title: "Camera Viewshed" });
 
 // ArcGIS FeatureLayers for submarine cables and military bases
 const cableLayer = new FeatureLayer({
@@ -119,7 +122,7 @@ const militaryLayer = new FeatureLayer({
     })
   }),
   popupEnabled: false,
-  visible: true
+  visible: false
 });
 
 // =====================================================
@@ -131,11 +134,11 @@ const map = new Map({
   ground: "world-elevation",
   layers: [
     cableLayer, cableTerminalLayer,
-    footprintLayer, orbitLayer,
+    footprintLayer, orbitLayer, starlinkOrbitLayer,
     earthquakeLayer, nasaEventLayer,
     militaryLayer,
-    cctvLayer, urbanPOILayer,
-    satelliteLayer, aircraftLayer
+    cctvLayer, viewshedLayer, urbanPOILayer,
+    satelliteLayer, starlinkLayer, aircraftLayer
   ]
 });
 
@@ -167,16 +170,18 @@ const buildingsLayer = new SceneLayer({
   title: "3D Buildings",
   visible: false,
   renderer: new SimpleRenderer({
-    symbol: new MeshSymbol3D({
-      symbolLayers: [new FillSymbol3DLayerMesh({
+    symbol: {
+      type: "mesh-3d",
+      symbolLayers: [{
+        type: "fill",
         material: { color: [45, 50, 58, 0.9] },
         edges: {
           type: "solid",
           color: [70, 78, 90, 0.5],
           size: 0.5
         }
-      })]
-    })
+      }]
+    }
   })
 });
 map.add(buildingsLayer);
@@ -205,8 +210,8 @@ let savedLayerVisibility = {};
 
 function hideGlobalLayers() {
   const globalLayers = {
-    satelliteLayer, orbitLayer, footprintLayer, aircraftLayer,
-    earthquakeLayer, nasaEventLayer, cableLayer, cableTerminalLayer,
+    satelliteLayer, orbitLayer, footprintLayer, starlinkLayer, starlinkOrbitLayer,
+    aircraftLayer, earthquakeLayer, nasaEventLayer, cableLayer, cableTerminalLayer,
     militaryLayer, urbanPOILayer
   };
   savedLayerVisibility = {};
@@ -218,8 +223,8 @@ function hideGlobalLayers() {
 
 function restoreGlobalLayers() {
   const globalLayers = {
-    satelliteLayer, orbitLayer, footprintLayer, aircraftLayer,
-    earthquakeLayer, nasaEventLayer, cableLayer, cableTerminalLayer,
+    satelliteLayer, orbitLayer, footprintLayer, starlinkLayer, starlinkOrbitLayer,
+    aircraftLayer, earthquakeLayer, nasaEventLayer, cableLayer, cableTerminalLayer,
     militaryLayer, urbanPOILayer
   };
   for (const [name, layer] of Object.entries(globalLayers)) {
@@ -331,14 +336,26 @@ function watchCameraAltitude() {
 // CITY-LEVEL DATA: LIVE TRAFFIC CAMERAS (DOT APIs)
 // =====================================================
 
-const cctvSymbol = new PointSymbol3D({
+// Live feed camera — bright green diamond, large and distinctive
+const cctvSymbolLive = new PointSymbol3D({
   symbolLayers: [new IconSymbol3DLayer({
-    resource: { primitive: "square" },
-    size: 8,
-    material: { color: [255, 50, 50, 0.9] },
-    outline: { color: [255, 50, 50, 0.4], size: 1 }
+    resource: { primitive: "kite" },
+    size: 14,
+    material: { color: [0, 255, 65, 1] },
+    outline: { color: [0, 255, 65, 0.7], size: 3 }
   })]
 });
+
+// Location-only camera — small dim red dot
+const cctvSymbolOffline = new PointSymbol3D({
+  symbolLayers: [new IconSymbol3DLayer({
+    resource: { primitive: "circle" },
+    size: 5,
+    material: { color: [255, 60, 60, 0.5] },
+    outline: { color: [255, 60, 60, 0.2], size: 1 }
+  })]
+});
+
 
 // Caltrans districts: { id: [lat, lon, radiusKm] }
 const CALTRANS_DISTRICTS = {
@@ -455,9 +472,10 @@ async function loadCityData(lat, lon) {
   }
 
   for (const cam of cameras) {
+    const hasLiveFeed = !!(cam.imageUrl || cam.streamUrl);
     cctvLayer.add(new Graphic({
       geometry: new Point({ longitude: cam.lon, latitude: cam.lat, z: 5 }),
-      symbol: cctvSymbol,
+      symbol: hasLiveFeed ? cctvSymbolLive : cctvSymbolOffline,
       attributes: {
         type: "cctv",
         name: cam.name,
@@ -599,6 +617,33 @@ const orbitSymbol = new LineSymbol3D({
 
 const orbitSymbolSelected = new LineSymbol3D({
   symbolLayers: [new LineSymbol3DLayer({ material: { color: [255, 176, 0, 0.6] }, size: 2 })]
+});
+
+// SpaceX Starlink symbols — blue/white theme
+const starlinkSymbol = new PointSymbol3D({
+  symbolLayers: [new IconSymbol3DLayer({
+    resource: { primitive: "square" },
+    size: 5,
+    material: { color: [79, 195, 247, 0.85] },
+    outline: { color: [79, 195, 247, 0.3], size: 1 }
+  })]
+});
+
+const starlinkSymbolSelected = new PointSymbol3D({
+  symbolLayers: [new IconSymbol3DLayer({
+    resource: { primitive: "square" },
+    size: 12,
+    material: { color: [255, 255, 255, 1] },
+    outline: { color: [79, 195, 247, 0.7], size: 3 }
+  })]
+});
+
+const starlinkOrbitSymbol = new LineSymbol3D({
+  symbolLayers: [new LineSymbol3DLayer({ material: { color: [79, 195, 247, 0.2] }, size: 0.8 })]
+});
+
+const starlinkOrbitSymbolSelected = new LineSymbol3D({
+  symbolLayers: [new LineSymbol3DLayer({ material: { color: [255, 255, 255, 0.5] }, size: 1.5 })]
 });
 
 const footprintSymbol = new PolygonSymbol3D({
@@ -856,6 +901,113 @@ function updateSatellites() {
   footprintLayer.removeAll(); footprintLayer.addMany(fpGraphics);
   document.getElementById("hud-sat-count").textContent = `SATELLITES: ${count}`;
 }
+
+// --- SpaceX Starlink ---
+
+const starlinkData = [];
+
+async function loadStarlink() {
+  if (!satelliteJs) return;
+  setLoadingText("Fetching Starlink constellation...");
+
+  let tles = await fetchTLEs(CONFIG.TLE_STARLINK_URL);
+
+  // If CelesTrak blocks starlink group, try to find STARLINK sats from existing feeds
+  if (tles.length === 0) {
+    // Fetch a broader set via the supplemental group
+    const supp = await fetchTLEs("https://celestrak.org/NORAD/elements/gp.php?GROUP=last-30-days&FORMAT=tle");
+    tles = supp.filter(t => t.name.toUpperCase().includes("STARLINK"));
+    if (tles.length === 0) {
+      console.log("[WorldView] Using fallback Starlink TLEs");
+      tles = FALLBACK_STARLINK_TLES;
+    }
+  }
+
+  // Sample evenly across the constellation for visual spread
+  const step = Math.max(1, Math.floor(tles.length / CONFIG.MAX_STARLINK));
+  const sampled = [];
+  for (let i = 0; i < tles.length && sampled.length < CONFIG.MAX_STARLINK; i += step) {
+    sampled.push(tles[i]);
+  }
+
+  starlinkData.length = 0;
+  const now = new Date();
+
+  for (const tle of sampled) {
+    try {
+      const satrec = satelliteJs.twoline2satrec(tle.tle1, tle.tle2);
+      if (!propagateSatellite(satrec, now)) continue;
+      const noradId = tle.tle2.substring(2, 7).trim();
+      starlinkData.push({ name: tle.name, satrec, noradId });
+    } catch { /* skip */ }
+  }
+
+  console.log(`[WorldView] ${starlinkData.length} Starlink satellites initialized (from ${tles.length} total)`);
+  updateStarlink();
+}
+
+function updateStarlink() {
+  if (!satelliteJs || starlinkData.length === 0) return;
+  const now = new Date();
+  const satGraphics = [], orbitGraphics = [];
+  let count = 0;
+
+  for (const sat of starlinkData) {
+    const pos = propagateSatellite(sat.satrec, now);
+    if (!pos) continue;
+    sat.currentPos = pos;
+    count++;
+
+    const isSel = selectedFeature?.type === "starlink" && selectedFeature.id === sat.noradId;
+
+    satGraphics.push(new Graphic({
+      geometry: new Point({ longitude: pos.longitude, latitude: pos.latitude, z: pos.altitude }),
+      symbol: isSel ? starlinkSymbolSelected : starlinkSymbol,
+      attributes: { type: "starlink", name: sat.name, noradId: sat.noradId,
+        lat: pos.latitude.toFixed(4), lon: pos.longitude.toFixed(4),
+        alt: (pos.altitude / 1000).toFixed(1), vel: pos.velocity.toFixed(2) }
+    }));
+
+    // Show orbit for selected starlink
+    if (isSel) {
+      const orbitPath = computeOrbitPath(sat.satrec, now, 90, CONFIG.ORBIT_POINTS);
+      if (orbitPath.length > 1) {
+        for (const seg of splitOrbitAtAntimeridian(orbitPath)) {
+          orbitGraphics.push(new Graphic({
+            geometry: new Polyline({ paths: [seg.map(p => [p.longitude, p.latitude, p.altitude])] }),
+            symbol: starlinkOrbitSymbolSelected
+          }));
+        }
+      }
+    }
+  }
+
+  starlinkLayer.removeAll(); starlinkLayer.addMany(satGraphics);
+  starlinkOrbitLayer.removeAll(); starlinkOrbitLayer.addMany(orbitGraphics);
+  document.getElementById("hud-starlink-count").textContent = `STARLINK: ${count}`;
+}
+
+// Fallback Starlink TLEs — representative real-format entries across multiple orbital planes
+const FALLBACK_STARLINK_TLES = [
+  { name: "STARLINK-1007", tle1: "1 44713U 19074A   26063.50000000  .00001500  00000+0  10000-3 0  9991", tle2: "2 44713  53.0536  10.0000 0001897 267.0000  93.0000 15.05546100 10001" },
+  { name: "STARLINK-1008", tle1: "1 44714U 19074B   26063.50000000  .00001500  00000+0  10000-3 0  9992", tle2: "2 44714  53.0536  30.0000 0001897 267.0000 120.0000 15.05546100 10002" },
+  { name: "STARLINK-1013", tle1: "1 44719U 19074G   26063.50000000  .00001500  00000+0  10000-3 0  9993", tle2: "2 44719  53.0536  50.0000 0001897 267.0000 150.0000 15.05546100 10003" },
+  { name: "STARLINK-1019", tle1: "1 44725U 19074M   26063.50000000  .00001500  00000+0  10000-3 0  9994", tle2: "2 44725  53.0536  70.0000 0001897 267.0000 180.0000 15.05546100 10004" },
+  { name: "STARLINK-1038", tle1: "1 44744U 19074AF  26063.50000000  .00001500  00000+0  10000-3 0  9995", tle2: "2 44744  53.0536  90.0000 0001897 267.0000 210.0000 15.05546100 10005" },
+  { name: "STARLINK-1051", tle1: "1 44757U 19074AS  26063.50000000  .00001500  00000+0  10000-3 0  9996", tle2: "2 44757  53.0536 110.0000 0001897 267.0000 240.0000 15.05546100 10006" },
+  { name: "STARLINK-1060", tle1: "1 44766U 19074BB  26063.50000000  .00001500  00000+0  10000-3 0  9997", tle2: "2 44766  53.0536 130.0000 0001897 267.0000 270.0000 15.05546100 10007" },
+  { name: "STARLINK-1070", tle1: "1 44776U 19074BL  26063.50000000  .00001500  00000+0  10000-3 0  9998", tle2: "2 44776  53.0536 150.0000 0001897 267.0000 300.0000 15.05546100 10008" },
+  { name: "STARLINK-1078", tle1: "1 44784U 19074BT  26063.50000000  .00001500  00000+0  10000-3 0  9999", tle2: "2 44784  53.0536 170.0000 0001897 267.0000 330.0000 15.05546100 10009" },
+  { name: "STARLINK-1090", tle1: "1 44796U 19074CF  26063.50000000  .00001500  00000+0  10000-3 0  9990", tle2: "2 44796  53.0536 190.0000 0001897 267.0000   0.0000 15.05546100 10010" },
+  { name: "STARLINK-1100", tle1: "1 44806U 19074CP  26063.50000000  .00001500  00000+0  10000-3 0  9991", tle2: "2 44806  53.0536 210.0000 0001897 267.0000  30.0000 15.05546100 10011" },
+  { name: "STARLINK-1110", tle1: "1 44816U 19074CZ  26063.50000000  .00001500  00000+0  10000-3 0  9992", tle2: "2 44816  53.0536 230.0000 0001897 267.0000  60.0000 15.05546100 10012" },
+  { name: "STARLINK-1120", tle1: "1 44826U 19074DJ  26063.50000000  .00001500  00000+0  10000-3 0  9993", tle2: "2 44826  53.0536 250.0000 0001897 267.0000  90.0000 15.05546100 10013" },
+  { name: "STARLINK-1130", tle1: "1 44836U 19074DT  26063.50000000  .00001500  00000+0  10000-3 0  9994", tle2: "2 44836  53.0536 270.0000 0001897 267.0000 120.0000 15.05546100 10014" },
+  { name: "STARLINK-1140", tle1: "1 44846U 19074ED  26063.50000000  .00001500  00000+0  10000-3 0  9995", tle2: "2 44846  53.0536 290.0000 0001897 267.0000 150.0000 15.05546100 10015" },
+  { name: "STARLINK-1150", tle1: "1 44856U 19074EN  26063.50000000  .00001500  00000+0  10000-3 0  9996", tle2: "2 44856  53.0536 310.0000 0001897 267.0000 180.0000 15.05546100 10016" },
+  { name: "STARLINK-1160", tle1: "1 44866U 19074EX  26063.50000000  .00001500  00000+0  10000-3 0  9997", tle2: "2 44866  53.0536 330.0000 0001897 267.0000 210.0000 15.05546100 10017" },
+  { name: "STARLINK-1170", tle1: "1 44876U 19074FH  26063.50000000  .00001500  00000+0  10000-3 0  9998", tle2: "2 44876  53.0536 350.0000 0001897 267.0000 240.0000 15.05546100 10018" },
+];
 
 // --- Aircraft ---
 
@@ -1130,6 +1282,131 @@ function hideFeatureDetail() {
 // CCTV CAMERA FEED POPUP
 // =====================================================
 
+// =====================================================
+// CAMERA VIEWSHED (3D cone visualization)
+// =====================================================
+
+function showViewshed(lat, lon, heading) {
+  viewshedLayer.removeAll();
+
+  const camLat = parseFloat(lat);
+  const camLon = parseFloat(lon);
+  const camZ = 8; // camera height in meters
+
+  // Viewshed parameters
+  const fov = 70;          // field of view in degrees
+  const range = 0.0008;    // ~80m range in degrees (approx)
+  const segments = 20;     // smoothness of the cone
+  const headingRad = (heading * Math.PI) / 180;
+  const halfFov = (fov / 2) * Math.PI / 180;
+
+  // Build the cone ground footprint as a polygon ring
+  const ring = [[camLon, camLat, camZ]];
+  for (let i = 0; i <= segments; i++) {
+    const angle = headingRad - halfFov + (i / segments) * 2 * halfFov;
+    const dist = range * (1 - 0.3 * Math.abs(i / segments - 0.5)); // slight taper
+    const px = camLon + dist * Math.sin(angle) / Math.cos(camLat * Math.PI / 180);
+    const py = camLat + dist * Math.cos(angle);
+    ring.push([px, py, 2]); // ground level
+  }
+  ring.push([camLon, camLat, camZ]); // close ring
+
+  // Ground footprint (translucent fill)
+  const footprint = new Graphic({
+    geometry: new Polygon({ rings: [ring] }),
+    symbol: new PolygonSymbol3D({
+      symbolLayers: [new FillSymbol3DLayer({
+        material: { color: [0, 255, 65, 0.12] },
+        outline: { color: [0, 255, 65, 0.4], size: 1 }
+      })]
+    })
+  });
+  viewshedLayer.add(footprint);
+
+  // Viewshed edge lines (wireframe effect)
+  const leftAngle = headingRad - halfFov;
+  const rightAngle = headingRad + halfFov;
+  const farLeft = [
+    camLon + range * Math.sin(leftAngle) / Math.cos(camLat * Math.PI / 180),
+    camLat + range * Math.cos(leftAngle), 2
+  ];
+  const farRight = [
+    camLon + range * Math.sin(rightAngle) / Math.cos(camLat * Math.PI / 180),
+    camLat + range * Math.cos(rightAngle), 2
+  ];
+
+  // Side rays
+  for (const farPt of [farLeft, farRight]) {
+    viewshedLayer.add(new Graphic({
+      geometry: new Polyline({
+        paths: [[[camLon, camLat, camZ], farPt]]
+      }),
+      symbol: new LineSymbol3D({
+        symbolLayers: [new LineSymbol3DLayer({
+          material: { color: [0, 255, 65, 0.6] },
+          size: 1.5
+        })]
+      })
+    }));
+  }
+
+  // Arc at the far end
+  const arcPath = [];
+  for (let i = 0; i <= segments; i++) {
+    const angle = headingRad - halfFov + (i / segments) * 2 * halfFov;
+    const px = camLon + range * Math.sin(angle) / Math.cos(camLat * Math.PI / 180);
+    const py = camLat + range * Math.cos(angle);
+    arcPath.push([px, py, 2]);
+  }
+  viewshedLayer.add(new Graphic({
+    geometry: new Polyline({ paths: [arcPath] }),
+    symbol: new LineSymbol3D({
+      symbolLayers: [new LineSymbol3DLayer({
+        material: { color: [0, 255, 65, 0.4] },
+        size: 1
+      })]
+    })
+  }));
+
+  // Vertical lines at far corners (3D effect)
+  for (const farPt of [farLeft, farRight]) {
+    viewshedLayer.add(new Graphic({
+      geometry: new Polyline({
+        paths: [[[farPt[0], farPt[1], 2], [farPt[0], farPt[1], camZ]]]
+      }),
+      symbol: new LineSymbol3D({
+        symbolLayers: [new LineSymbol3DLayer({
+          material: { color: [0, 255, 65, 0.3] },
+          size: 0.8
+        })]
+      })
+    }));
+  }
+
+  // Upper polygon (elevated viewshed plane)
+  const upperRing = [[camLon, camLat, camZ]];
+  for (let i = 0; i <= segments; i++) {
+    const angle = headingRad - halfFov + (i / segments) * 2 * halfFov;
+    const px = camLon + range * Math.sin(angle) / Math.cos(camLat * Math.PI / 180);
+    const py = camLat + range * Math.cos(angle);
+    upperRing.push([px, py, camZ]);
+  }
+  upperRing.push([camLon, camLat, camZ]);
+
+  viewshedLayer.add(new Graphic({
+    geometry: new Polygon({ rings: [upperRing] }),
+    symbol: new PolygonSymbol3D({
+      symbolLayers: [new FillSymbol3DLayer({
+        material: { color: [0, 255, 65, 0.06] }
+      })]
+    })
+  }));
+}
+
+function hideViewshed() {
+  viewshedLayer.removeAll();
+}
+
 function showCctvPopup(attrs) {
   const popup = document.getElementById("cctv-popup");
   const feed = document.getElementById("cctv-popup-feed");
@@ -1205,6 +1482,11 @@ function showCctvPopup(attrs) {
     ${attrs.route ? detailRow("ROUTE", attrs.route) : ""}
     ${detailRow("COORDS", `${lat}°, ${lon}°`)}
   `;
+
+  // Show 3D viewshed cone at camera location
+  // Use a random-ish heading based on coords (real heading not in data)
+  const heading = ((parseFloat(lat) * 1000 + parseFloat(lon) * 1000) % 360 + 360) % 360;
+  showViewshed(lat, lon, heading);
 }
 
 function hideCctvPopup() {
@@ -1215,6 +1497,7 @@ function hideCctvPopup() {
     const feed = document.getElementById("cctv-popup-feed");
     if (feed) feed.innerHTML = "";
   }
+  hideViewshed();
 }
 
 // Close CCTV popup button
@@ -1236,6 +1519,7 @@ document.querySelectorAll("[data-mode]").forEach(btn => {
 // Layer toggles
 const layerMap = {
   "toggle-satellites": satelliteLayer,
+  "toggle-starlink": [starlinkLayer, starlinkOrbitLayer],
   "toggle-orbits": orbitLayer,
   "toggle-footprints": footprintLayer,
   "toggle-aircraft": aircraftLayer,
@@ -1286,6 +1570,12 @@ view.on("click", async (event) => {
       selectedFeature = { type: "satellite", id: attrs.noradId };
       showFeatureDetail(attrs);
       updateSatellites();
+      return;
+    }
+    if (r.graphic.layer === starlinkLayer) {
+      selectedFeature = { type: "starlink", id: attrs.noradId };
+      showFeatureDetail(attrs);
+      updateStarlink();
       return;
     }
     if (r.graphic.layer === aircraftLayer) {
@@ -1373,13 +1663,15 @@ async function init() {
   // Load all data feeds in parallel (don't wait for view)
   setLoadingProgress(5);
   setLoadingText("Loading satellite data...");
-  const satPromise = loadSatellites().then(() => { setLoadingProgress(25); });
+  const satPromise = loadSatellites().then(() => { setLoadingProgress(20); });
+  const starlinkPromise = loadStarlink().then(() => { setLoadingProgress(35); });
 
   setLoadingText("Loading all data feeds...");
-  const [, , , ,] = await Promise.allSettled([
+  await Promise.allSettled([
     satPromise,
-    loadAircraft().then(() => { setLoadingProgress(45); }),
-    loadEarthquakes().then(() => { setLoadingProgress(60); }),
+    starlinkPromise,
+    loadAircraft().then(() => { setLoadingProgress(50); }),
+    loadEarthquakes().then(() => { setLoadingProgress(65); }),
     loadNasaEvents().then(() => { setLoadingProgress(75); }),
   ]);
 
@@ -1399,6 +1691,7 @@ async function init() {
 
   // Set up periodic refreshes
   setInterval(updateSatellites, CONFIG.SAT_UPDATE_INTERVAL);
+  setInterval(updateStarlink, CONFIG.SAT_UPDATE_INTERVAL);
   setInterval(loadAircraft, CONFIG.AIRCRAFT_UPDATE_INTERVAL);
   setInterval(loadEarthquakes, CONFIG.QUAKE_UPDATE_INTERVAL);
 

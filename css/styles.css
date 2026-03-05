@@ -496,6 +496,7 @@ html, body {
 .toggle-orange { color: var(--hud-orange); }
 .toggle-cyan { color: var(--hud-cyan); }
 .toggle-magenta { color: var(--hud-magenta); }
+.toggle-blue { color: #4fc3f7; }
 
 /* Feature Detail Popup */
 #feature-detail {

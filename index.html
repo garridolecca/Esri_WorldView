@@ -30,6 +30,7 @@
             <div class="intro-section-title">// DATA FEEDS</div>
             <ul>
               <li><span class="dot dot-green"></span> Satellites &mdash; CelesTrak TLE / SGP4</li>
+              <li><span class="dot dot-cyan"></span> SpaceX Starlink &mdash; CelesTrak constellation</li>
               <li><span class="dot dot-amber"></span> Aircraft &mdash; OpenSky Network ADS-B</li>
               <li><span class="dot dot-red"></span> Earthquakes &mdash; USGS Real-Time</li>
               <li><span class="dot dot-orange"></span> Natural Events &mdash; NASA EONET</li>
@@ -107,6 +108,7 @@
       <div class="hud-section">
         <div class="hud-label">TRACKING</div>
         <div id="hud-sat-count">SATELLITES: --</div>
+        <div id="hud-starlink-count">STARLINK: --</div>
         <div id="hud-aircraft-count">AIRCRAFT: --</div>
         <div id="hud-quake-count">EARTHQUAKES: --</div>
         <div id="hud-event-count">NASA EVENTS: --</div>
@@ -135,14 +137,15 @@
         <div class="hud-label">LAYERS</div>
         <div class="hud-toggle-group">
           <label class="hud-toggle"><input type="checkbox" id="toggle-satellites" checked /><span class="toggle-green">SATELLITES</span></label>
+          <label class="hud-toggle"><input type="checkbox" id="toggle-starlink" checked /><span class="toggle-blue">STARLINK</span></label>
           <label class="hud-toggle"><input type="checkbox" id="toggle-orbits" checked /><span class="toggle-green">ORBITS</span></label>
-          <label class="hud-toggle"><input type="checkbox" id="toggle-footprints" checked /><span class="toggle-green">FOOTPRINTS</span></label>
-          <label class="hud-toggle"><input type="checkbox" id="toggle-aircraft" checked /><span class="toggle-amber">AIRCRAFT</span></label>
-          <label class="hud-toggle"><input type="checkbox" id="toggle-earthquakes" checked /><span class="toggle-red">EARTHQUAKES</span></label>
-          <label class="hud-toggle"><input type="checkbox" id="toggle-events" checked /><span class="toggle-orange">NASA EVENTS</span></label>
+          <label class="hud-toggle"><input type="checkbox" id="toggle-footprints" /><span class="toggle-green">FOOTPRINTS</span></label>
+          <label class="hud-toggle"><input type="checkbox" id="toggle-aircraft" /><span class="toggle-amber">AIRCRAFT</span></label>
+          <label class="hud-toggle"><input type="checkbox" id="toggle-earthquakes" /><span class="toggle-red">EARTHQUAKES</span></label>
+          <label class="hud-toggle"><input type="checkbox" id="toggle-events" /><span class="toggle-orange">NASA EVENTS</span></label>
           <label class="hud-toggle"><input type="checkbox" id="toggle-cables" checked /><span class="toggle-cyan">SUB CABLES</span></label>
-          <label class="hud-toggle"><input type="checkbox" id="toggle-bases" checked /><span class="toggle-magenta">MIL BASES</span></label>
-          <label class="hud-toggle"><input type="checkbox" id="toggle-cctv" checked /><span class="toggle-red">CCTV</span></label>
+          <label class="hud-toggle"><input type="checkbox" id="toggle-bases" /><span class="toggle-magenta">MIL BASES</span></label>
+          <label class="hud-toggle"><input type="checkbox" id="toggle-cctv" /><span class="toggle-red">CCTV</span></label>
         </div>
       </div>
       <div class="hud-section">
