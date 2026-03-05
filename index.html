@@ -35,8 +35,7 @@
               <li><span class="dot dot-orange"></span> Natural Events &mdash; NASA EONET</li>
               <li><span class="dot dot-cyan"></span> Submarine Cables &mdash; ArcGIS</li>
               <li><span class="dot dot-magenta"></span> Military Bases &mdash; US DoD / ArcGIS</li>
-              <li><span class="dot dot-red"></span> CCTV Cameras &mdash; OpenStreetMap / Overpass</li>
-              <li><span class="dot dot-cyan"></span> Urban POIs &mdash; Police, Fire, Hospitals, Telecom</li>
+              <li><span class="dot dot-red"></span> CCTV Cameras &mdash; OpenStreetMap / Overpass (city view)</li>
             </ul>
           </div>
 
@@ -114,7 +113,6 @@
         <div id="hud-cable-count">SUB CABLES: --</div>
         <div id="hud-base-count">MIL BASES: --</div>
         <div id="hud-cctv-count">CCTV: --</div>
-        <div id="hud-poi-count">URBAN POI: --</div>
       </div>
       <div class="hud-section">
         <div class="hud-label">STATUS</div>
@@ -145,7 +143,6 @@
           <label class="hud-toggle"><input type="checkbox" id="toggle-cables" checked /><span class="toggle-cyan">SUB CABLES</span></label>
           <label class="hud-toggle"><input type="checkbox" id="toggle-bases" checked /><span class="toggle-magenta">MIL BASES</span></label>
           <label class="hud-toggle"><input type="checkbox" id="toggle-cctv" checked /><span class="toggle-red">CCTV</span></label>
-          <label class="hud-toggle"><input type="checkbox" id="toggle-urban" checked /><span class="toggle-cyan">URBAN POI</span></label>
         </div>
       </div>
       <div class="hud-section">
@@ -166,6 +163,16 @@
       <div class="hud-label" id="feature-detail-label">TARGET INFO</div>
       <div id="feature-detail-body"></div>
       <button id="feature-detail-close" class="hud-btn">DISMISS</button>
+    </div>
+
+    <!-- CCTV Camera Feed Popup -->
+    <div id="cctv-popup" class="hidden">
+      <div id="cctv-popup-header">
+        <div class="hud-label" id="cctv-popup-title">CAMERA FEED</div>
+        <button id="cctv-popup-close" class="hud-btn">X</button>
+      </div>
+      <div id="cctv-popup-feed"></div>
+      <div id="cctv-popup-info"></div>
     </div>
 
     <!-- Scan Line Effect (CRT mode) -->

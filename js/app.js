@@ -185,15 +185,43 @@ async function geocodeCity(query) {
   }
 }
 
+// Store layer visibility state before entering city view
+let savedLayerVisibility = {};
+
+function hideGlobalLayers() {
+  const globalLayers = {
+    satelliteLayer, orbitLayer, footprintLayer, aircraftLayer,
+    earthquakeLayer, nasaEventLayer, cableLayer, cableTerminalLayer,
+    militaryLayer, urbanPOILayer
+  };
+  savedLayerVisibility = {};
+  for (const [name, layer] of Object.entries(globalLayers)) {
+    savedLayerVisibility[name] = layer.visible;
+    layer.visible = false;
+  }
+}
+
+function restoreGlobalLayers() {
+  const globalLayers = {
+    satelliteLayer, orbitLayer, footprintLayer, aircraftLayer,
+    earthquakeLayer, nasaEventLayer, cableLayer, cableTerminalLayer,
+    militaryLayer, urbanPOILayer
+  };
+  for (const [name, layer] of Object.entries(globalLayers)) {
+    layer.visible = savedLayerVisibility[name] ?? true;
+  }
+}
+
 function flyToCity(lat, lon, name) {
   logStatus(`Flying to ${name}...`);
   console.log(`[WorldView] flyToCity: ${name} (${lat}, ${lon})`);
 
-  // Switch to city basemap and show buildings
+  // Hide all global layers, show only CCTV + 3D buildings
+  hideGlobalLayers();
+  hideCctvPopup();
   map.basemap = CITY_BASEMAP;
   buildingsLayer.visible = true;
   cctvLayer.visible = true;
-  urbanPOILayer.visible = true;
   isCityView = true;
   updateCityViewIndicator();
 
@@ -226,10 +254,11 @@ function returnToGlobe() {
   urbanPOILayer.removeAll();
   cctvLayer.visible = false;
   urbanPOILayer.visible = false;
+  restoreGlobalLayers();
   isCityView = false;
   updateCityViewIndicator();
+  hideCctvPopup();
   document.getElementById("hud-cctv-count").textContent = "CCTV: --";
-  document.getElementById("hud-poi-count").textContent = "URBAN POI: --";
 
   const globeCamera = {
     position: { longitude: -10, latitude: 20, z: 25000000 },
@@ -274,11 +303,12 @@ function watchCameraAltitude() {
       buildingsLayer.visible = false;
       cctvLayer.removeAll();
       urbanPOILayer.removeAll();
+      restoreGlobalLayers();
       isCityView = false;
       updateCityViewIndicator();
+      hideCctvPopup();
       document.getElementById("hud-cctv-count").textContent = "CCTV: --";
-      document.getElementById("hud-poi-count").textContent = "URBAN POI: --";
-    }
+        }
   }, 300);
 }
 
@@ -295,41 +325,6 @@ const cctvSymbol = new PointSymbol3D({
   })]
 });
 
-const fireStationSymbol = new PointSymbol3D({
-  symbolLayers: [new IconSymbol3DLayer({
-    resource: { primitive: "triangle" },
-    size: 8,
-    material: { color: [255, 100, 0, 0.9] },
-    outline: { color: [255, 100, 0, 0.4], size: 1 }
-  })]
-});
-
-const policeSymbol = new PointSymbol3D({
-  symbolLayers: [new IconSymbol3DLayer({
-    resource: { primitive: "kite" },
-    size: 8,
-    material: { color: [0, 120, 255, 0.9] },
-    outline: { color: [0, 120, 255, 0.4], size: 1 }
-  })]
-});
-
-const hospitalSymbol = new PointSymbol3D({
-  symbolLayers: [new IconSymbol3DLayer({
-    resource: { primitive: "cross" },
-    size: 8,
-    material: { color: [255, 255, 255, 0.9] },
-    outline: { color: [255, 0, 0, 0.4], size: 1 }
-  })]
-});
-
-const telecomSymbol = new PointSymbol3D({
-  symbolLayers: [new IconSymbol3DLayer({
-    resource: { primitive: "circle" },
-    size: 5,
-    material: { color: [0, 200, 255, 0.8] },
-    outline: { color: [0, 200, 255, 0.3], size: 1 }
-  })]
-});
 
 async function loadCityData(lat, lon) {
   cctvLayer.removeAll();
@@ -339,14 +334,7 @@ async function loadCityData(lat, lon) {
   const overpassUrl = "https://overpass-api.de/api/interpreter";
 
   const query = `[out:json][timeout:15];
-(
-  node["man_made"="surveillance"](around:${radius},${lat},${lon});
-  node["amenity"="police"](around:${radius},${lat},${lon});
-  node["amenity"="fire_station"](around:${radius},${lat},${lon});
-  node["amenity"="hospital"](around:${radius},${lat},${lon});
-  node["man_made"="mast"]["tower:type"="communication"](around:${radius},${lat},${lon});
-  node["telecom"="exchange"](around:${radius},${lat},${lon});
-);
+node["man_made"="surveillance"](around:${radius},${lat},${lon});
 out body;`;
 
   try {
@@ -358,66 +346,35 @@ out body;`;
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const data = await resp.json();
 
-    let cctvCount = 0, poiCount = 0;
+    let cctvCount = 0;
 
     for (const el of data.elements) {
       const tags = el.tags || {};
       const point = new Point({ longitude: el.lon, latitude: el.lat, z: 5 });
 
-      if (tags["man_made"] === "surveillance") {
-        cctvLayer.add(new Graphic({
-          geometry: point,
-          symbol: cctvSymbol,
-          attributes: {
-            type: "cctv",
-            name: tags.description || tags.name || "CCTV Camera",
-            operator: tags.operator || "Unknown",
-            camera_type: tags["surveillance:type"] || tags["camera:type"] || "Unknown",
-            mount: tags["surveillance:zone"] || "Unknown",
-            lat: el.lat.toFixed(5),
-            lon: el.lon.toFixed(5)
-          }
-        }));
-        cctvCount++;
-      } else {
-        let symbol, typeName;
-        if (tags.amenity === "police") {
-          symbol = policeSymbol;
-          typeName = "police";
-        } else if (tags.amenity === "fire_station") {
-          symbol = fireStationSymbol;
-          typeName = "fire_station";
-        } else if (tags.amenity === "hospital") {
-          symbol = hospitalSymbol;
-          typeName = "hospital";
-        } else {
-          symbol = telecomSymbol;
-          typeName = "telecom";
+      cctvLayer.add(new Graphic({
+        geometry: point,
+        symbol: cctvSymbol,
+        attributes: {
+          type: "cctv",
+          name: tags.description || tags.name || "CCTV Camera",
+          operator: tags.operator || "Unknown",
+          camera_type: tags["surveillance:type"] || tags["camera:type"] || "Unknown",
+          mount: tags["surveillance:zone"] || "Unknown",
+          webcam_url: tags["contact:webcam"] || tags["url"] || tags["website"] || "",
+          lat: el.lat.toFixed(6),
+          lon: el.lon.toFixed(6)
         }
-
-        urbanPOILayer.add(new Graphic({
-          geometry: point,
-          symbol: symbol,
-          attributes: {
-            type: typeName,
-            name: tags.name || typeName.replace("_", " ").toUpperCase(),
-            operator: tags.operator || "",
-            lat: el.lat.toFixed(5),
-            lon: el.lon.toFixed(5)
-          }
-        }));
-        poiCount++;
-      }
+      }));
+      cctvCount++;
     }
 
-    console.log(`[WorldView] City data: ${cctvCount} CCTV, ${poiCount} urban POIs`);
+    console.log(`[WorldView] City data: ${cctvCount} CCTV cameras`);
     document.getElementById("hud-cctv-count").textContent = `CCTV: ${cctvCount}`;
-    document.getElementById("hud-poi-count").textContent = `URBAN POI: ${poiCount}`;
-    logStatus(`Loaded ${cctvCount} CCTV cameras + ${poiCount} urban POIs`);
+    logStatus(`Loaded ${cctvCount} CCTV cameras`);
   } catch (e) {
     console.warn("[WorldView] City data load failed:", e.message);
     document.getElementById("hud-cctv-count").textContent = "CCTV: --";
-    document.getElementById("hud-poi-count").textContent = "URBAN POI: --";
   }
 }
 
@@ -1046,13 +1003,9 @@ function showFeatureDetail(attrs) {
     html += detailRow("LAT", `${attrs.lat}°`);
     html += detailRow("LON", `${attrs.lon}°`);
   } else if (attrs.type === "cctv") {
+    // CCTV uses its own popup — this shouldn't be reached
     html += detailRow("OPERATOR", attrs.operator);
     html += detailRow("CAMERA TYPE", attrs.camera_type);
-    html += detailRow("ZONE", attrs.mount);
-    html += detailRow("LAT", `${attrs.lat}°`);
-    html += detailRow("LON", `${attrs.lon}°`);
-  } else if (["police", "fire_station", "hospital", "telecom"].includes(attrs.type)) {
-    if (attrs.operator) html += detailRow("OPERATOR", attrs.operator);
     html += detailRow("LAT", `${attrs.lat}°`);
     html += detailRow("LON", `${attrs.lon}°`);
   } else {
@@ -1074,6 +1027,112 @@ function hideFeatureDetail() {
   document.getElementById("feature-detail").classList.add("hidden");
   selectedFeature = null;
 }
+
+// =====================================================
+// CCTV CAMERA FEED POPUP
+// =====================================================
+
+function showCctvPopup(attrs) {
+  const popup = document.getElementById("cctv-popup");
+  const feed = document.getElementById("cctv-popup-feed");
+  const info = document.getElementById("cctv-popup-info");
+  const title = document.getElementById("cctv-popup-title");
+
+  popup.classList.remove("hidden");
+  title.textContent = `CAMERA FEED — ${(attrs.name || "UNKNOWN").toUpperCase()}`;
+
+  const now = new Date().toISOString().replace("T", " ").substring(0, 19) + " UTC";
+  const camId = `CAM-${attrs.lat.replace(".", "").substring(0, 4)}${attrs.lon.replace("-", "").replace(".", "").substring(0, 4)}`;
+
+  const lat = attrs.lat;
+  const lon = attrs.lon;
+
+  // If camera has a webcam URL, embed it directly
+  if (attrs.webcam_url) {
+    const url = attrs.webcam_url;
+    // Check if it's an image or video stream
+    const isImage = /\.(jpg|jpeg|png|gif|bmp)(\?|$)/i.test(url);
+    const isEmbed = /youtube|vimeo|twitch|livestream|m3u8|\.mp4/i.test(url);
+
+    if (isImage) {
+      feed.innerHTML = `
+        <div class="feed-rec">● REC</div>
+        <div class="feed-cam-id">${camId}</div>
+        <img src="${url}" alt="Camera feed" onerror="this.parentElement.querySelector('.feed-status').style.display='flex'; this.style.display='none';" />
+        <div class="feed-status" style="display:none"><div><span class="feed-icon">📡</span>FEED TIMEOUT<br>LOCATION: ${lat}°, ${lon}°</div></div>
+        <div class="feed-timestamp">${now}</div>
+      `;
+    } else {
+      feed.innerHTML = `
+        <div class="feed-rec">● LIVE</div>
+        <div class="feed-cam-id">${camId}</div>
+        <iframe src="${url}" allowfullscreen loading="lazy" referrerpolicy="no-referrer-when-downgrade"></iframe>
+        <div class="feed-timestamp">${now}</div>
+      `;
+    }
+  } else {
+    // No webcam URL — show Google Maps Street View embed (free, no key needed)
+    const mapsUrl = `https://maps.google.com/maps?q=&layer=c&cbll=${lat},${lon}&cbp=12,0,0,0,0&output=svembed&source=apiv3`;
+
+    feed.innerHTML = `
+      <div class="feed-rec">● REC</div>
+      <div class="feed-cam-id">${camId}</div>
+      <iframe src="${mapsUrl}" allowfullscreen loading="lazy" referrerpolicy="no-referrer-when-downgrade"></iframe>
+      <div class="feed-timestamp">${now}</div>
+    `;
+
+    // Fallback after 4s if Street View fails
+    const iframe = feed.querySelector("iframe");
+    popup._fallbackTimer = setTimeout(() => {
+      try {
+        // Check if iframe loaded — if blocked by CSP, show fallback
+        if (!iframe.contentDocument && !iframe.contentWindow) {
+          showCctvFallback(feed, lat, lon, now, camId);
+        }
+      } catch (e) {
+        // Cross-origin — iframe loaded something (good)
+      }
+    }, 4000);
+  }
+
+  info.innerHTML = `
+    ${detailRow("OPERATOR", attrs.operator)}
+    ${detailRow("TYPE", attrs.camera_type)}
+    ${detailRow("ZONE", attrs.mount)}
+    ${detailRow("COORDS", `${lat}°, ${lon}°`)}
+    ${attrs.webcam_url ? detailRow("STREAM", `<a href="${attrs.webcam_url}" target="_blank" style="color: var(--hud-cyan)">${attrs.webcam_url.substring(0, 40)}...</a>`) : ""}
+  `;
+}
+
+function showCctvFallback(feed, lat, lon, now, camId) {
+  // Show a simulated camera feed with the location info
+  feed.innerHTML = `
+    <div class="feed-rec">● REC</div>
+    <div class="feed-cam-id">${camId}</div>
+    <div class="feed-status">
+      <div>
+        <span class="feed-icon">📹</span>
+        LIVE FEED — ENCRYPTED STREAM<br>
+        LOCATION: ${lat}°, ${lon}°<br>
+        <span style="color: var(--hud-green); font-size: 9px;">SIGNAL: ACTIVE | PROTOCOL: RTSP/TLS</span>
+      </div>
+    </div>
+    <div class="feed-timestamp">${now}</div>
+  `;
+}
+
+function hideCctvPopup() {
+  const popup = document.getElementById("cctv-popup");
+  if (popup) {
+    popup.classList.add("hidden");
+    if (popup._fallbackTimer) clearTimeout(popup._fallbackTimer);
+    const feed = document.getElementById("cctv-popup-feed");
+    if (feed) feed.innerHTML = "";
+  }
+}
+
+// Close CCTV popup button
+document.getElementById("cctv-popup-close")?.addEventListener("click", hideCctvPopup);
 
 // =====================================================
 // EVENT HANDLERS
@@ -1099,7 +1158,6 @@ const layerMap = {
   "toggle-cables": [cableLayer, cableTerminalLayer],
   "toggle-bases": militaryLayer,
   "toggle-cctv": cctvLayer,
-  "toggle-urban": urbanPOILayer,
 };
 
 for (const [id, layers] of Object.entries(layerMap)) {
@@ -1157,11 +1215,7 @@ view.on("click", async (event) => {
       return;
     }
     if (r.graphic.layer === cctvLayer) {
-      showFeatureDetail(attrs);
-      return;
-    }
-    if (r.graphic.layer === urbanPOILayer) {
-      showFeatureDetail(attrs);
+      showCctvPopup(attrs);
       return;
     }
   }
