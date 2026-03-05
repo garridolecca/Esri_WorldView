@@ -185,55 +185,38 @@ async function geocodeCity(query) {
   }
 }
 
-async function flyToCity(lat, lon, name) {
+function flyToCity(lat, lon, name) {
   logStatus(`Flying to ${name}...`);
   console.log(`[WorldView] flyToCity: ${name} (${lat}, ${lon})`);
 
-  // Show buildings and city layers
+  // Switch to city basemap and show buildings
+  map.basemap = CITY_BASEMAP;
   buildingsLayer.visible = true;
   cctvLayer.visible = true;
   urbanPOILayer.visible = true;
   isCityView = true;
   updateCityViewIndicator();
 
-  try {
-    // Step 1: Zoom to region (fast approach)
-    await view.goTo({
-      position: { longitude: lon, latitude: lat, z: 50000 },
-      heading: 0,
-      tilt: 30
-    }, { duration: 1500, easing: "ease-in-out" });
+  const cityCamera = {
+    position: { longitude: lon, latitude: lat, z: CITY_VIEW_ALT },
+    heading: 30,
+    tilt: CITY_VIEW_TILT
+  };
 
-    // Step 2: Switch basemap after arriving near the city
-    map.basemap = CITY_BASEMAP;
+  // Set camera immediately as a guarantee, then try animated goTo on top
+  try { view.camera = cityCamera; } catch (e) { /* ignore */ }
 
-    // Step 3: Zoom to street level with tilt for 3D buildings
-    await view.goTo({
-      position: { longitude: lon, latitude: lat, z: CITY_VIEW_ALT },
-      heading: 30,
-      tilt: CITY_VIEW_TILT
-    }, { duration: 2000, easing: "ease-in-out" });
-    console.log("[WorldView] flyToCity: goTo completed");
-  } catch (e) {
+  view.goTo(cityCamera, { duration: 2500, easing: "ease-in-out" }).then(() => {
+    console.log("[WorldView] flyToCity goTo animation completed");
+  }).catch((e) => {
     console.warn("[WorldView] flyToCity goTo issue:", e.message);
-    // Fallback: set camera and basemap directly
-    map.basemap = CITY_BASEMAP;
-    try {
-      view.camera = {
-        position: { longitude: lon, latitude: lat, z: CITY_VIEW_ALT },
-        heading: 30,
-        tilt: CITY_VIEW_TILT
-      };
-    } catch (e2) {
-      console.warn("[WorldView] flyToCity camera fallback failed:", e2.message);
-    }
-  }
+  });
 
   logStatus(`Viewing ${name} — Loading city data...`);
   loadCityData(lat, lon);
 }
 
-async function returnToGlobe() {
+function returnToGlobe() {
   logStatus("Returning to globe...");
   console.log("[WorldView] returnToGlobe");
 
@@ -254,12 +237,14 @@ async function returnToGlobe() {
     tilt: 0
   };
 
-  try {
-    await view.goTo(globeCamera, { duration: 2500, easing: "ease-in-out" });
-  } catch (e) {
+  // Set camera immediately, then animate
+  try { view.camera = globeCamera; } catch (e) { /* ignore */ }
+
+  view.goTo(globeCamera, { duration: 2000, easing: "ease-in-out" }).then(() => {
+    console.log("[WorldView] returnToGlobe goTo completed");
+  }).catch((e) => {
     console.warn("[WorldView] returnToGlobe goTo issue:", e.message);
-    try { view.camera = globeCamera; } catch (e2) { /* ignore */ }
-  }
+  });
 
   logStatus("All systems operational");
 }
