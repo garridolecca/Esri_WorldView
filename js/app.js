@@ -9,6 +9,7 @@ const [
   PointSymbol3D, IconSymbol3DLayer,
   LineSymbol3D, LineSymbol3DLayer,
   PolygonSymbol3D, FillSymbol3DLayer,
+  MeshSymbol3D, FillSymbol3DLayerMesh,
   SimpleRenderer, UniqueValueRenderer,
   SimpleLineSymbol, SimpleMarkerSymbol,
   Basemap
@@ -27,6 +28,8 @@ const [
   "@arcgis/core/symbols/LineSymbol3D.js",
   "@arcgis/core/symbols/LineSymbol3DLayer.js",
   "@arcgis/core/symbols/PolygonSymbol3D.js",
+  "@arcgis/core/symbols/FillSymbol3DLayer.js",
+  "@arcgis/core/symbols/MeshSymbol3D.js",
   "@arcgis/core/symbols/FillSymbol3DLayer.js",
   "@arcgis/core/renderers/SimpleRenderer.js",
   "@arcgis/core/renderers/UniqueValueRenderer.js",
@@ -162,7 +165,19 @@ const view = new SceneView({
 const buildingsLayer = new SceneLayer({
   url: "https://basemaps3d.arcgis.com/arcgis/rest/services/OpenStreetMap3D_Buildings_v1/SceneServer",
   title: "3D Buildings",
-  visible: false
+  visible: false,
+  renderer: new SimpleRenderer({
+    symbol: new MeshSymbol3D({
+      symbolLayers: [new FillSymbol3DLayerMesh({
+        material: { color: [45, 50, 58, 0.9] },
+        edges: {
+          type: "solid",
+          color: [70, 78, 90, 0.5],
+          size: 0.5
+        }
+      })]
+    })
+  })
 });
 map.add(buildingsLayer);
 
@@ -313,69 +328,152 @@ function watchCameraAltitude() {
 }
 
 // =====================================================
-// CITY-LEVEL DATA: CCTV + URBAN POIs (Overpass API)
+// CITY-LEVEL DATA: LIVE TRAFFIC CAMERAS (DOT APIs)
 // =====================================================
 
 const cctvSymbol = new PointSymbol3D({
   symbolLayers: [new IconSymbol3DLayer({
     resource: { primitive: "square" },
-    size: 6,
+    size: 8,
     material: { color: [255, 50, 50, 0.9] },
     outline: { color: [255, 50, 50, 0.4], size: 1 }
   })]
 });
 
+// Caltrans districts: { id: [lat, lon, radiusKm] }
+const CALTRANS_DISTRICTS = {
+  3: [38.58, -121.49, 150], 4: [37.77, -122.42, 100],
+  5: [34.95, -120.43, 150], 6: [36.75, -119.77, 150],
+  7: [34.05, -118.24, 100], 8: [33.95, -117.40, 100],
+  10: [37.95, -121.29, 100], 11: [32.72, -117.16, 80],
+  12: [33.75, -117.87, 60],
+};
 
-async function loadCityData(lat, lon) {
-  cctvLayer.removeAll();
-  urbanPOILayer.removeAll();
+function haversineKm(lat1, lon1, lat2, lon2) {
+  const R = 6371, dLat = (lat2 - lat1) * Math.PI / 180, dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
 
-  const radius = 5000; // 5km radius around city center
-  const overpassUrl = "https://overpass-api.de/api/interpreter";
+function findCaltransDistrict(lat, lon) {
+  if (lon < -124 || lon > -114 || lat < 32 || lat > 42) return null;
+  let best = null, bestDist = Infinity;
+  for (const [d, [dlat, dlon, radius]] of Object.entries(CALTRANS_DISTRICTS)) {
+    const dist = haversineKm(lat, lon, dlat, dlon);
+    if (dist < radius && dist < bestDist) { best = d; bestDist = dist; }
+  }
+  return best;
+}
 
-  const query = `[out:json][timeout:15];
-node["man_made"="surveillance"](around:${radius},${lat},${lon});
-out body;`;
-
+async function loadCaltransCameras(lat, lon, district) {
+  const url = `https://cwwp2.dot.ca.gov/data/d${district}/cctv/cctvStatusD${district.toString().padStart(2, "0")}.json`;
   try {
-    const resp = await fetch(overpassUrl, {
+    const resp = await fetch(url);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const json = await resp.json();
+    const cams = json.data || json;
+    const nearby = [];
+    for (const item of cams) {
+      const c = item.cctv || item;
+      const loc = c.location || {};
+      const clat = parseFloat(loc.latitude), clon = parseFloat(loc.longitude);
+      if (!clat || !clon || c.inService !== "true") continue;
+      const dist = haversineKm(lat, lon, clat, clon);
+      if (dist > 30) continue;
+      const img = c.imageData || {};
+      nearby.push({
+        name: loc.locationName || "DOT Camera",
+        lat: clat, lon: clon,
+        imageUrl: img?.static?.currentImageURL || "",
+        streamUrl: img?.streamingVideoURL || "",
+        direction: loc.direction || "", route: loc.route || "",
+        operator: "Caltrans", dist
+      });
+    }
+    return nearby.sort((a, b) => a.dist - b.dist);
+  } catch (e) {
+    console.warn(`[WorldView] Caltrans D${district} failed:`, e.message);
+    return [];
+  }
+}
+
+// Additional Caltrans districts for wider California coverage
+async function loadAllCaltransCameras(lat, lon) {
+  // Try all districts in parallel, merge results
+  const districts = Object.keys(CALTRANS_DISTRICTS);
+  const promises = districts.map(d => loadCaltransCameras(lat, lon, d));
+  const results = await Promise.allSettled(promises);
+  const all = [];
+  for (const r of results) {
+    if (r.status === "fulfilled") all.push(...r.value);
+  }
+  return all.sort((a, b) => a.dist - b.dist);
+}
+
+async function loadOverpassCameras(lat, lon) {
+  const query = `[out:json][timeout:15];node["man_made"="surveillance"](around:5000,${lat},${lon});out body;`;
+  try {
+    const resp = await fetch("https://overpass-api.de/api/interpreter", {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: "data=" + encodeURIComponent(query)
     });
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const data = await resp.json();
-
-    let cctvCount = 0;
-
-    for (const el of data.elements) {
+    return data.elements.map(el => {
       const tags = el.tags || {};
-      const point = new Point({ longitude: el.lon, latitude: el.lat, z: 5 });
-
-      cctvLayer.add(new Graphic({
-        geometry: point,
-        symbol: cctvSymbol,
-        attributes: {
-          type: "cctv",
-          name: tags.description || tags.name || "CCTV Camera",
-          operator: tags.operator || "Unknown",
-          camera_type: tags["surveillance:type"] || tags["camera:type"] || "Unknown",
-          mount: tags["surveillance:zone"] || "Unknown",
-          webcam_url: tags["contact:webcam"] || tags["url"] || tags["website"] || "",
-          lat: el.lat.toFixed(6),
-          lon: el.lon.toFixed(6)
-        }
-      }));
-      cctvCount++;
-    }
-
-    console.log(`[WorldView] City data: ${cctvCount} CCTV cameras`);
-    document.getElementById("hud-cctv-count").textContent = `CCTV: ${cctvCount}`;
-    logStatus(`Loaded ${cctvCount} CCTV cameras`);
+      return {
+        name: tags.description || tags.name || "CCTV Camera",
+        lat: el.lat, lon: el.lon,
+        imageUrl: tags["contact:webcam"] || tags.url || tags.website || "",
+        streamUrl: "", direction: tags["surveillance:zone"] || "",
+        route: "", operator: tags.operator || "OSM"
+      };
+    });
   } catch (e) {
-    console.warn("[WorldView] City data load failed:", e.message);
-    document.getElementById("hud-cctv-count").textContent = "CCTV: --";
+    console.warn("[WorldView] Overpass failed:", e.message);
+    return [];
   }
+}
+
+async function loadCityData(lat, lon) {
+  cctvLayer.removeAll();
+  urbanPOILayer.removeAll();
+  let cameras = [];
+
+  // Try Caltrans (California)
+  const district = findCaltransDistrict(lat, lon);
+  if (district) {
+    cameras = await loadCaltransCameras(lat, lon, district);
+    console.log(`[WorldView] Caltrans D${district}: ${cameras.length} cameras`);
+  }
+
+  // Fallback: Overpass API (worldwide OSM surveillance cameras)
+  if (cameras.length === 0) {
+    cameras = await loadOverpassCameras(lat, lon);
+    console.log(`[WorldView] Overpass: ${cameras.length} cameras`);
+  }
+
+  for (const cam of cameras) {
+    cctvLayer.add(new Graphic({
+      geometry: new Point({ longitude: cam.lon, latitude: cam.lat, z: 5 }),
+      symbol: cctvSymbol,
+      attributes: {
+        type: "cctv",
+        name: cam.name,
+        operator: cam.operator || "Unknown",
+        camera_type: cam.direction ? `Direction: ${cam.direction}` : "Traffic Camera",
+        route: cam.route || "",
+        imageUrl: cam.imageUrl || "",
+        streamUrl: cam.streamUrl || "",
+        lat: cam.lat.toFixed(6),
+        lon: cam.lon.toFixed(6)
+      }
+    }));
+  }
+
+  document.getElementById("hud-cctv-count").textContent = `CAMERAS: ${cameras.length}`;
+  logStatus(cameras.length > 0 ? `Loaded ${cameras.length} traffic cameras` : "No traffic cameras in this area");
 }
 
 // Search bar logic
@@ -1039,85 +1137,73 @@ function showCctvPopup(attrs) {
   const title = document.getElementById("cctv-popup-title");
 
   popup.classList.remove("hidden");
-  title.textContent = `CAMERA FEED — ${(attrs.name || "UNKNOWN").toUpperCase()}`;
+  const camName = (attrs.name || "UNKNOWN").toUpperCase();
+  title.textContent = `LIVE FEED — ${camName.substring(0, 40)}`;
 
   const now = new Date().toISOString().replace("T", " ").substring(0, 19) + " UTC";
   const camId = `CAM-${attrs.lat.replace(".", "").substring(0, 4)}${attrs.lon.replace("-", "").replace(".", "").substring(0, 4)}`;
-
   const lat = attrs.lat;
   const lon = attrs.lon;
 
-  // If camera has a webcam URL, embed it directly
-  if (attrs.webcam_url) {
-    const url = attrs.webcam_url;
-    // Check if it's an image or video stream
-    const isImage = /\.(jpg|jpeg|png|gif|bmp)(\?|$)/i.test(url);
-    const isEmbed = /youtube|vimeo|twitch|livestream|m3u8|\.mp4/i.test(url);
-
-    if (isImage) {
-      feed.innerHTML = `
-        <div class="feed-rec">● REC</div>
-        <div class="feed-cam-id">${camId}</div>
-        <img src="${url}" alt="Camera feed" onerror="this.parentElement.querySelector('.feed-status').style.display='flex'; this.style.display='none';" />
-        <div class="feed-status" style="display:none"><div><span class="feed-icon">📡</span>FEED TIMEOUT<br>LOCATION: ${lat}°, ${lon}°</div></div>
-        <div class="feed-timestamp">${now}</div>
-      `;
-    } else {
-      feed.innerHTML = `
-        <div class="feed-rec">● LIVE</div>
-        <div class="feed-cam-id">${camId}</div>
-        <iframe src="${url}" allowfullscreen loading="lazy" referrerpolicy="no-referrer-when-downgrade"></iframe>
-        <div class="feed-timestamp">${now}</div>
-      `;
-    }
-  } else {
-    // No webcam URL — show Google Maps Street View embed (free, no key needed)
-    const mapsUrl = `https://maps.google.com/maps?q=&layer=c&cbll=${lat},${lon}&cbp=12,0,0,0,0&output=svembed&source=apiv3`;
-
+  if (attrs.imageUrl) {
+    // Real DOT camera image — auto-refresh every 5 seconds
+    const imgSrc = attrs.imageUrl + (attrs.imageUrl.includes("?") ? "&" : "?") + "t=" + Date.now();
     feed.innerHTML = `
-      <div class="feed-rec">● REC</div>
+      <div class="feed-rec">● LIVE</div>
       <div class="feed-cam-id">${camId}</div>
-      <iframe src="${mapsUrl}" allowfullscreen loading="lazy" referrerpolicy="no-referrer-when-downgrade"></iframe>
+      <img id="cctv-live-img" src="${imgSrc}" alt="${camName}"
+        onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';" />
+      <div class="feed-status" style="display:none"><div>FEED TEMPORARILY UNAVAILABLE<br>${lat}°, ${lon}°</div></div>
       <div class="feed-timestamp">${now}</div>
     `;
-
-    // Fallback after 4s if Street View fails
-    const iframe = feed.querySelector("iframe");
-    popup._fallbackTimer = setTimeout(() => {
-      try {
-        // Check if iframe loaded — if blocked by CSP, show fallback
-        if (!iframe.contentDocument && !iframe.contentWindow) {
-          showCctvFallback(feed, lat, lon, now, camId);
-        }
-      } catch (e) {
-        // Cross-origin — iframe loaded something (good)
+    // Auto-refresh image every 5 seconds for live feel
+    if (popup._refreshTimer) clearInterval(popup._refreshTimer);
+    popup._refreshTimer = setInterval(() => {
+      const img = document.getElementById("cctv-live-img");
+      if (img && img.style.display !== "none") {
+        img.src = attrs.imageUrl + (attrs.imageUrl.includes("?") ? "&" : "?") + "t=" + Date.now();
+        const ts = feed.querySelector(".feed-timestamp");
+        if (ts) ts.textContent = new Date().toISOString().replace("T", " ").substring(0, 19) + " UTC";
       }
-    }, 4000);
+    }, 5000);
+  } else if (attrs.streamUrl) {
+    // HLS video stream (m3u8) — show as link since HLS needs a player
+    feed.innerHTML = `
+      <div class="feed-rec">● STREAM</div>
+      <div class="feed-cam-id">${camId}</div>
+      <div class="feed-status">
+        <div>
+          LIVE VIDEO STREAM AVAILABLE<br>
+          <a href="${attrs.streamUrl}" target="_blank" style="color: var(--hud-cyan); font-size: 11px; text-decoration: underline; word-break: break-all;">
+            OPEN STREAM IN NEW TAB
+          </a><br>
+          <span style="color: var(--hud-green); font-size: 9px; margin-top: 8px; display: block;">
+            FORMAT: HLS/M3U8 | PROTOCOL: RTSP
+          </span>
+        </div>
+      </div>
+      <div class="feed-timestamp">${now}</div>
+    `;
+  } else {
+    // No feed available (OSM cameras)
+    feed.innerHTML = `
+      <div class="feed-rec" style="color: #666;">● OFFLINE</div>
+      <div class="feed-cam-id">${camId}</div>
+      <div class="feed-status">
+        <div>
+          NO PUBLIC FEED AVAILABLE<br>
+          <span style="font-size: 9px; color: #666;">Camera mapped at ${lat}°, ${lon}°</span>
+        </div>
+      </div>
+      <div class="feed-timestamp">${now}</div>
+    `;
   }
 
   info.innerHTML = `
     ${detailRow("OPERATOR", attrs.operator)}
     ${detailRow("TYPE", attrs.camera_type)}
-    ${detailRow("ZONE", attrs.mount)}
+    ${attrs.route ? detailRow("ROUTE", attrs.route) : ""}
     ${detailRow("COORDS", `${lat}°, ${lon}°`)}
-    ${attrs.webcam_url ? detailRow("STREAM", `<a href="${attrs.webcam_url}" target="_blank" style="color: var(--hud-cyan)">${attrs.webcam_url.substring(0, 40)}...</a>`) : ""}
-  `;
-}
-
-function showCctvFallback(feed, lat, lon, now, camId) {
-  // Show a simulated camera feed with the location info
-  feed.innerHTML = `
-    <div class="feed-rec">● REC</div>
-    <div class="feed-cam-id">${camId}</div>
-    <div class="feed-status">
-      <div>
-        <span class="feed-icon">📹</span>
-        LIVE FEED — ENCRYPTED STREAM<br>
-        LOCATION: ${lat}°, ${lon}°<br>
-        <span style="color: var(--hud-green); font-size: 9px;">SIGNAL: ACTIVE | PROTOCOL: RTSP/TLS</span>
-      </div>
-    </div>
-    <div class="feed-timestamp">${now}</div>
   `;
 }
 
@@ -1125,7 +1211,7 @@ function hideCctvPopup() {
   const popup = document.getElementById("cctv-popup");
   if (popup) {
     popup.classList.add("hidden");
-    if (popup._fallbackTimer) clearTimeout(popup._fallbackTimer);
+    if (popup._refreshTimer) { clearInterval(popup._refreshTimer); popup._refreshTimer = null; }
     const feed = document.getElementById("cctv-popup-feed");
     if (feed) feed.innerHTML = "";
   }
