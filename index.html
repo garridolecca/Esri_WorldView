@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Esri WorldView - Satellite Intelligence Simulator</title>
+  <link rel="stylesheet" href="https://js.arcgis.com/5.0/esri/themes/dark/main.css" />
+  <link rel="stylesheet" href="css/styles.css" />
+  <script type="module" src="https://js.arcgis.com/5.0/"></script>
+  <script type="module" src="js/app.js"></script>
+</head>
+<body>
+  <div id="viewDiv"></div>
+
+  <!-- HUD Overlay -->
+  <div id="hud-overlay">
+    <!-- Top Bar -->
+    <div id="hud-top-bar">
+      <div id="hud-title">ESRI WORLDVIEW <span class="hud-subtitle">// INTELLIGENCE SIMULATOR</span></div>
+      <div id="hud-clock"></div>
+    </div>
+
+    <!-- Crosshair -->
+    <div id="crosshair">
+      <div class="crosshair-line crosshair-top"></div>
+      <div class="crosshair-line crosshair-bottom"></div>
+      <div class="crosshair-line crosshair-left"></div>
+      <div class="crosshair-line crosshair-right"></div>
+      <div class="crosshair-circle"></div>
+    </div>
+
+    <!-- Bottom Left Info Panel -->
+    <div id="hud-info-panel">
+      <div class="hud-section">
+        <div class="hud-label">CAMERA POSITION</div>
+        <div id="hud-lat">LAT: --</div>
+        <div id="hud-lon">LON: --</div>
+        <div id="hud-alt">ALT: --</div>
+        <div id="hud-heading">HDG: --</div>
+        <div id="hud-tilt">TILT: --</div>
+      </div>
+      <div class="hud-section">
+        <div class="hud-label">TRACKING</div>
+        <div id="hud-sat-count">SATELLITES: --</div>
+        <div id="hud-aircraft-count">AIRCRAFT: --</div>
+      </div>
+    </div>
+
+    <!-- Bottom Right Controls -->
+    <div id="hud-controls">
+      <div class="hud-section">
+        <div class="hud-label">RENDER MODE</div>
+        <div class="hud-btn-group">
+          <button class="hud-btn active" data-mode="normal">STANDARD</button>
+          <button class="hud-btn" data-mode="nvg">NVG</button>
+          <button class="hud-btn" data-mode="thermal">THERMAL</button>
+          <button class="hud-btn" data-mode="crt">CRT</button>
+        </div>
+      </div>
+      <div class="hud-section">
+        <div class="hud-label">LAYERS</div>
+        <div class="hud-toggle-group">
+          <label class="hud-toggle"><input type="checkbox" id="toggle-satellites" checked /><span>SATELLITES</span></label>
+          <label class="hud-toggle"><input type="checkbox" id="toggle-orbits" checked /><span>ORBITS</span></label>
+          <label class="hud-toggle"><input type="checkbox" id="toggle-footprints" checked /><span>FOOTPRINTS</span></label>
+          <label class="hud-toggle"><input type="checkbox" id="toggle-aircraft" checked /><span>AIRCRAFT</span></label>
+        </div>
+      </div>
+      <div class="hud-section">
+        <div class="hud-label">GOTO</div>
+        <div class="hud-btn-group">
+          <button class="hud-btn goto-btn" data-target="globe">GLOBE</button>
+          <button class="hud-btn goto-btn" data-target="usa">USA</button>
+          <button class="hud-btn goto-btn" data-target="europe">EUROPE</button>
+          <button class="hud-btn goto-btn" data-target="asia">ASIA</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Satellite Detail Popup -->
+    <div id="sat-detail" class="hidden">
+      <div class="hud-label">TARGET INFO</div>
+      <div id="sat-detail-name">--</div>
+      <div id="sat-detail-id">NORAD: --</div>
+      <div id="sat-detail-lat">LAT: --</div>
+      <div id="sat-detail-lon">LON: --</div>
+      <div id="sat-detail-alt">ALT: --</div>
+      <div id="sat-detail-vel">VEL: --</div>
+      <button id="sat-detail-close" class="hud-btn">DISMISS</button>
+    </div>
+
+    <!-- Scan Line Effect (CRT mode) -->
+    <div id="scanlines" class="hidden"></div>
+  </div>
+</body>
+</html>
