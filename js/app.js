@@ -1430,47 +1430,69 @@ function showViewshed(lat, lon, heading) {
 
   const camLat = parseFloat(lat);
   const camLon = parseFloat(lon);
-  const camZ = 12; // camera height in meters
-  const topZ = 40; // top of viewshed cone
+  const camZ = 10;  // camera mount height
+  const topZ = 50;  // top of viewshed volume
 
-  // Viewshed parameters — large enough to see on 3D city view
-  const fov = 75;          // field of view in degrees
-  const range = 0.0015;    // ~150m range in degrees
-  const segments = 30;     // smoothness of the cone
+  // Viewshed — 400m range, 80° FOV (realistic traffic cam)
+  const fov = 80;
+  const rangeDeg = 0.004;  // ~400m in degrees
+  const segments = 30;
   const headingRad = (heading * Math.PI) / 180;
   const halfFov = (fov / 2) * Math.PI / 180;
   const cosLat = Math.cos(camLat * Math.PI / 180);
 
-  // Helper: point at angle and distance
   const farPt = (angle, dist, z) => [
     camLon + dist * Math.sin(angle) / cosLat,
     camLat + dist * Math.cos(angle),
     z
   ];
 
-  // ---- 1. Ground coverage polygon (bright fill on ground) ----
-  const groundRing = [[camLon, camLat, 1]];
+  const leftAngle = headingRad - halfFov;
+  const rightAngle = headingRad + halfFov;
+
+  // Screen-space line symbols (always visible regardless of zoom)
+  const edgeLine = new LineSymbol3D({
+    symbolLayers: [new LineSymbol3DLayer({
+      material: { color: [0, 255, 100, 0.8] },
+      size: 3
+    })]
+  });
+  const arcLine = new LineSymbol3D({
+    symbolLayers: [new LineSymbol3DLayer({
+      material: { color: [0, 255, 100, 0.5] },
+      size: 2
+    })]
+  });
+  const pillarLine = new LineSymbol3D({
+    symbolLayers: [new LineSymbol3DLayer({
+      material: { color: [0, 255, 100, 0.3] },
+      size: 1.5
+    })]
+  });
+
+  // ---- 1. Ground coverage polygon (visible green fill) ----
+  const groundRing = [[camLon, camLat, 0]];
   for (let i = 0; i <= segments; i++) {
     const angle = headingRad - halfFov + (i / segments) * 2 * halfFov;
-    groundRing.push(farPt(angle, range, 1));
+    groundRing.push(farPt(angle, rangeDeg, 0));
   }
-  groundRing.push([camLon, camLat, 1]);
+  groundRing.push([camLon, camLat, 0]);
 
   viewshedLayer.add(new Graphic({
     geometry: new Polygon({ rings: [groundRing] }),
     symbol: new PolygonSymbol3D({
       symbolLayers: [new FillSymbol3DLayer({
-        material: { color: [0, 255, 100, 0.18] },
-        outline: { color: [0, 255, 100, 0.6], size: 2 }
+        material: { color: [0, 255, 100, 0.25] },
+        outline: { color: [0, 255, 100, 0.8], size: 2.5 }
       })]
     })
   }));
 
-  // ---- 2. Elevated viewshed cone (3D volume) ----
+  // ---- 2. Upper viewshed plane ----
   const upperRing = [[camLon, camLat, topZ]];
   for (let i = 0; i <= segments; i++) {
     const angle = headingRad - halfFov + (i / segments) * 2 * halfFov;
-    upperRing.push(farPt(angle, range, topZ));
+    upperRing.push(farPt(angle, rangeDeg, topZ));
   }
   upperRing.push([camLon, camLat, topZ]);
 
@@ -1478,101 +1500,81 @@ function showViewshed(lat, lon, heading) {
     geometry: new Polygon({ rings: [upperRing] }),
     symbol: new PolygonSymbol3D({
       symbolLayers: [new FillSymbol3DLayer({
-        material: { color: [0, 255, 100, 0.08] },
-        outline: { color: [0, 255, 100, 0.35], size: 1 }
+        material: { color: [0, 255, 100, 0.10] },
+        outline: { color: [0, 255, 100, 0.4], size: 1.5 }
       })]
     })
   }));
 
-  // ---- 3. Side edges — glowing 3D tubes from camera to far corners ----
-  const leftAngle = headingRad - halfFov;
-  const rightAngle = headingRad + halfFov;
-  const centerAngle = headingRad;
-  const edgeSymbol = new LineSymbol3D({
-    symbolLayers: [new PathSymbol3DLayer({
-      profile: "circle",
-      material: { color: [0, 255, 100, 0.7] },
-      emissive: { source: "color", strength: 2.0 },
-      width: 0.6,
-      height: 0.6,
-      cap: "round"
-    })]
-  });
-
-  // Left, right, and center rays
-  for (const angle of [leftAngle, rightAngle, centerAngle]) {
-    const far = farPt(angle, range, 1);
+  // ---- 3. Side edge rays from camera to far corners ----
+  for (const angle of [leftAngle, rightAngle, headingRad]) {
+    // Ground-level ray
     viewshedLayer.add(new Graphic({
       geometry: new Polyline({
-        paths: [[[camLon, camLat, camZ], far]]
+        paths: [[[camLon, camLat, camZ], farPt(angle, rangeDeg, 0)]]
       }),
-      symbol: edgeSymbol
+      symbol: edgeLine
     }));
-    // Upper edge
+    // Upper ray
     viewshedLayer.add(new Graphic({
       geometry: new Polyline({
-        paths: [[[camLon, camLat, topZ], farPt(angle, range, topZ)]]
+        paths: [[[camLon, camLat, topZ], farPt(angle, rangeDeg, topZ)]]
       }),
-      symbol: edgeSymbol
+      symbol: edgeLine
     }));
   }
 
   // ---- 4. Vertical pillars at far corners ----
-  const pillarSymbol = new LineSymbol3D({
-    symbolLayers: [new PathSymbol3DLayer({
-      profile: "circle",
-      material: { color: [0, 255, 100, 0.4] },
-      emissive: { source: "color", strength: 1.0 },
-      width: 0.4,
-      height: 0.4,
-      cap: "round"
-    })]
-  });
-
   for (const angle of [leftAngle, rightAngle]) {
-    const base = farPt(angle, range, 1);
-    const top = farPt(angle, range, topZ);
     viewshedLayer.add(new Graphic({
-      geometry: new Polyline({ paths: [[base, top]] }),
-      symbol: pillarSymbol
+      geometry: new Polyline({
+        paths: [[farPt(angle, rangeDeg, 0), farPt(angle, rangeDeg, topZ)]]
+      }),
+      symbol: pillarLine
     }));
   }
 
-  // ---- 5. Arc at far end (ground + upper) ----
-  const arcSymbol = new LineSymbol3D({
-    symbolLayers: [new PathSymbol3DLayer({
-      profile: "circle",
-      material: { color: [0, 255, 100, 0.5] },
-      emissive: { source: "color", strength: 1.5 },
-      width: 0.5,
-      height: 0.5,
-      cap: "round"
-    })]
-  });
-
-  for (const z of [1, topZ]) {
+  // ---- 5. Arcs at far end (ground + upper) ----
+  for (const z of [0, topZ]) {
     const arcPath = [];
     for (let i = 0; i <= segments; i++) {
       const angle = headingRad - halfFov + (i / segments) * 2 * halfFov;
-      arcPath.push(farPt(angle, range, z));
+      arcPath.push(farPt(angle, rangeDeg, z));
     }
     viewshedLayer.add(new Graphic({
       geometry: new Polyline({ paths: [arcPath] }),
-      symbol: arcSymbol
+      symbol: arcLine
     }));
   }
 
-  // ---- 6. Camera position marker (bright emissive sphere) ----
+  // ---- 6. Side walls (triangular fill panels connecting ground to top) ----
+  for (const angle of [leftAngle, rightAngle]) {
+    const wallRing = [
+      [camLon, camLat, camZ],
+      farPt(angle, rangeDeg, 0),
+      farPt(angle, rangeDeg, topZ),
+      [camLon, camLat, topZ],
+      [camLon, camLat, camZ]
+    ];
+    viewshedLayer.add(new Graphic({
+      geometry: new Polygon({ rings: [wallRing] }),
+      symbol: new PolygonSymbol3D({
+        symbolLayers: [new FillSymbol3DLayer({
+          material: { color: [0, 255, 100, 0.06] }
+        })]
+      })
+    }));
+  }
+
+  // ---- 7. Camera position marker ----
   viewshedLayer.add(new Graphic({
     geometry: new Point({ longitude: camLon, latitude: camLat, z: camZ }),
     symbol: new PointSymbol3D({
-      symbolLayers: [new ObjectSymbol3DLayer({
-        resource: { primitive: "sphere" },
+      symbolLayers: [new IconSymbol3DLayer({
+        resource: { primitive: "diamond" },
+        size: 18,
         material: { color: [0, 255, 100, 1] },
-        emissive: { source: "color", strength: 4.0 },
-        width: 3,
-        height: 3,
-        depth: 3
+        outline: { color: [255, 255, 255, 0.9], size: 3 }
       })]
     })
   }));
