@@ -542,16 +542,18 @@ html, body {
 /* CCTV Camera Feed Popup */
 #cctv-popup {
   position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  background: rgba(0, 0, 0, 0.92);
-  border: 1px solid var(--hud-red);
+  top: 60px;
+  left: 12px;
+  transform: none;
+  background: rgba(0, 0, 0, 0.94);
+  border: 1px solid var(--hud-green);
   z-index: 50;
-  width: 480px;
-  max-width: 90vw;
-  backdrop-filter: blur(6px);
-  box-shadow: 0 0 30px rgba(255, 50, 50, 0.2);
+  width: 380px;
+  max-width: 40vw;
+  max-height: calc(100vh - 80px);
+  overflow-y: auto;
+  backdrop-filter: blur(8px);
+  box-shadow: 0 0 40px rgba(0, 255, 100, 0.15), inset 0 0 20px rgba(0, 255, 100, 0.03);
   pointer-events: auto;
 }
 
@@ -560,25 +562,25 @@ html, body {
   justify-content: space-between;
   align-items: center;
   padding: 10px 14px;
-  border-bottom: 1px solid rgba(255, 50, 50, 0.3);
+  border-bottom: 1px solid rgba(0, 255, 100, 0.3);
 }
 
 #cctv-popup-header .hud-label {
-  color: var(--hud-red);
+  color: var(--hud-green);
   margin: 0;
 }
 
 #cctv-popup-close {
-  background: rgba(255, 50, 50, 0.15);
-  border-color: var(--hud-red);
-  color: var(--hud-red);
+  background: rgba(0, 255, 100, 0.1);
+  border-color: var(--hud-green);
+  color: var(--hud-green);
   font-size: 12px;
   padding: 3px 8px;
   min-width: auto;
 }
 
 #cctv-popup-close:hover {
-  background: var(--hud-red);
+  background: var(--hud-green);
   color: #000;
 }
 
@@ -655,7 +657,7 @@ html, body {
 #cctv-popup-info {
   padding: 10px 14px;
   font-size: 10px;
-  border-top: 1px solid rgba(255, 50, 50, 0.15);
+  border-top: 1px solid rgba(0, 255, 100, 0.15);
 }
 
 #cctv-popup-info .detail-row {
@@ -664,7 +666,7 @@ html, body {
 }
 
 #cctv-popup-info .detail-row strong {
-  color: var(--hud-red);
+  color: var(--hud-green);
 }
 
 /* Loading overlay */

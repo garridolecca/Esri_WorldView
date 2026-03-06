@@ -59,7 +59,7 @@ const CONFIG = {
   AIRCRAFT_UPDATE_INTERVAL: 15000,
   QUAKE_UPDATE_INTERVAL: 60000,
   MAX_SATELLITES: 250,
-  MAX_STARLINK: 200,
+  MAX_STARLINK: 800,
   MAX_AIRCRAFT: 600,
   ORBIT_POINTS: 180,
   FOOTPRINT_SEGMENTS: 36,
@@ -161,7 +161,7 @@ const view = new SceneView({
     starsEnabled: true,
     lighting: {
       type: "virtual",
-      glow: { intensity: 0.4 }
+      glow: { intensity: 0.6 }
     }
   },
   highlightOptions: {
@@ -656,50 +656,64 @@ const orbitSymbolSelected = new LineSymbol3D({
   })]
 });
 
-// --- SpaceX Starlink: Bright cyan-white emissive diamonds ---
+// --- SpaceX Starlink: White-hot emissive spheres with max glow ---
 const starlinkSymbol = new PointSymbol3D({
-  symbolLayers: [new ObjectSymbol3DLayer({
-    resource: { primitive: "diamond" },
-    material: { color: [80, 200, 255, 1] },
-    emissive: { source: "color", strength: 2.0 },
-    width: 60000,
-    height: 60000,
-    depth: 60000
-  })]
+  symbolLayers: [
+    new ObjectSymbol3DLayer({
+      resource: { primitive: "sphere" },
+      material: { color: [255, 255, 255, 1] },
+      emissive: { source: "color", strength: 4.0 },
+      width: 50000,
+      height: 50000,
+      depth: 50000
+    })
+  ]
 });
 
 const starlinkSymbolSelected = new PointSymbol3D({
-  symbolLayers: [new ObjectSymbol3DLayer({
-    resource: { primitive: "diamond" },
-    material: { color: [255, 255, 255, 1] },
-    emissive: { source: "color", strength: 3.0 },
-    width: 140000,
-    height: 140000,
-    depth: 140000
-  })]
+  symbolLayers: [
+    new ObjectSymbol3DLayer({
+      resource: { primitive: "diamond" },
+      material: { color: [255, 255, 255, 1] },
+      emissive: { source: "color", strength: 6.0 },
+      width: 200000,
+      height: 200000,
+      depth: 200000
+    })
+  ]
 });
 
-// --- Starlink Orbits: Electric blue 3D tubes ---
+// --- Starlink Orbits: Dual-layer thick neon blue tube + thin white core ---
 const starlinkOrbitSymbol = new LineSymbol3D({
   symbolLayers: [new PathSymbol3DLayer({
     profile: "circle",
-    material: { color: [80, 200, 255, 0.3] },
-    emissive: { source: "color", strength: 1.0 },
-    width: 6000,
-    height: 6000,
+    material: { color: [100, 180, 255, 0.25] },
+    emissive: { source: "color", strength: 1.5 },
+    width: 8000,
+    height: 8000,
     cap: "round"
   })]
 });
 
 const starlinkOrbitSymbolSelected = new LineSymbol3D({
-  symbolLayers: [new PathSymbol3DLayer({
-    profile: "circle",
-    material: { color: [180, 230, 255, 0.9] },
-    emissive: { source: "color", strength: 2.5 },
-    width: 12000,
-    height: 12000,
-    cap: "round"
-  })]
+  symbolLayers: [
+    new PathSymbol3DLayer({
+      profile: "circle",
+      material: { color: [60, 160, 255, 0.7] },
+      emissive: { source: "color", strength: 3.0 },
+      width: 25000,
+      height: 25000,
+      cap: "round"
+    }),
+    new PathSymbol3DLayer({
+      profile: "circle",
+      material: { color: [255, 255, 255, 0.9] },
+      emissive: { source: "color", strength: 5.0 },
+      width: 8000,
+      height: 8000,
+      cap: "round"
+    })
+  ]
 });
 
 // --- Coverage Footprints ---
@@ -1020,6 +1034,18 @@ function updateStarlink() {
   const satGraphics = [], orbitGraphics = [];
   let count = 0;
 
+  // Trail symbol — fading breadcrumbs behind each satellite
+  const trailSymbols = [0.6, 0.35, 0.15].map(alpha => new PointSymbol3D({
+    symbolLayers: [new ObjectSymbol3DLayer({
+      resource: { primitive: "sphere" },
+      material: { color: [180, 220, 255, alpha] },
+      emissive: { source: "color", strength: alpha * 3 },
+      width: 25000 * alpha,
+      height: 25000 * alpha,
+      depth: 25000 * alpha
+    })]
+  }));
+
   for (const sat of starlinkData) {
     const pos = propagateSatellite(sat.satrec, now);
     if (!pos) continue;
@@ -1036,16 +1062,56 @@ function updateStarlink() {
         alt: (pos.altitude / 1000).toFixed(1), vel: pos.velocity.toFixed(2) }
     }));
 
-    // Show orbit for selected starlink
+    // Motion trail — 3 fading breadcrumbs behind the satellite
+    const trailOffsets = [-15, -35, -60]; // seconds in the past
+    for (let t = 0; t < trailOffsets.length; t++) {
+      const pastTime = new Date(now.getTime() + trailOffsets[t] * 1000);
+      const pastPos = propagateSatellite(sat.satrec, pastTime);
+      if (pastPos) {
+        satGraphics.push(new Graphic({
+          geometry: new Point({ longitude: pastPos.longitude, latitude: pastPos.latitude, z: pastPos.altitude }),
+          symbol: trailSymbols[t]
+        }));
+      }
+    }
+
+    // Selected starlink: full orbit + ground track + coverage footprint
     if (isSel) {
-      const orbitPath = computeOrbitPath(sat.satrec, now, 90, CONFIG.ORBIT_POINTS);
+      const orbitPath = computeOrbitPath(sat.satrec, now, 95, CONFIG.ORBIT_POINTS);
       if (orbitPath.length > 1) {
+        // 3D orbital path (glowing tube)
         for (const seg of splitOrbitAtAntimeridian(orbitPath)) {
           orbitGraphics.push(new Graphic({
             geometry: new Polyline({ paths: [seg.map(p => [p.longitude, p.latitude, p.altitude])] }),
             symbol: starlinkOrbitSymbolSelected
           }));
         }
+        // Ground track (dashed line projected on surface)
+        for (const seg of splitOrbitAtAntimeridian(orbitPath)) {
+          orbitGraphics.push(new Graphic({
+            geometry: new Polyline({ paths: [seg.map(p => [p.longitude, p.latitude, 0])] }),
+            symbol: new LineSymbol3D({
+              symbolLayers: [new LineSymbol3DLayer({
+                material: { color: [60, 160, 255, 0.4] },
+                size: 2,
+                pattern: { style: "dash" }
+              })]
+            })
+          }));
+        }
+      }
+      // Coverage footprint for selected starlink
+      const altKm = pos.altitude / 1000;
+      if (altKm > 100 && altKm < 2000) {
+        orbitGraphics.push(new Graphic({
+          geometry: new Polygon({ rings: [computeFootprint(pos.latitude, pos.longitude, altKm, CONFIG.FOOTPRINT_SEGMENTS)] }),
+          symbol: new PolygonSymbol3D({
+            symbolLayers: [new FillSymbol3DLayer({
+              material: { color: [60, 160, 255, 0.08] },
+              outline: { color: [100, 200, 255, 0.5], size: 1.5 }
+            })]
+          })
+        }));
       }
     }
   }
@@ -1285,6 +1351,7 @@ function showFeatureDetail(attrs) {
 
   const typeLabels = {
     satellite: "SATELLITE TELEMETRY",
+    starlink: "SPACEX STARLINK",
     aircraft: "AIRCRAFT TRACKING",
     earthquake: "SEISMIC EVENT",
     nasa_event: "NATURAL EVENT",
@@ -1296,12 +1363,16 @@ function showFeatureDetail(attrs) {
 
   let html = `<div class="detail-name">${attrs.name || attrs.featureName || attrs.Name || "UNKNOWN"}</div>`;
 
-  if (attrs.type === "satellite") {
+  if (attrs.type === "satellite" || attrs.type === "starlink") {
     html += detailRow("NORAD", attrs.noradId);
     html += detailRow("LAT", `${attrs.lat}°`);
     html += detailRow("LON", `${attrs.lon}°`);
     html += detailRow("ALT", `${attrs.alt} km`);
     html += detailRow("VEL", `${attrs.vel} km/s`);
+    if (attrs.type === "starlink") {
+      html += detailRow("CONSTELLATION", "STARLINK LEO");
+      html += detailRow("ORBIT", "~550 km / 53°");
+    }
   } else if (attrs.type === "aircraft") {
     html += detailRow("CALLSIGN", attrs.callsign);
     html += detailRow("ALT", attrs.altitude);
@@ -1359,113 +1430,149 @@ function showViewshed(lat, lon, heading) {
 
   const camLat = parseFloat(lat);
   const camLon = parseFloat(lon);
-  const camZ = 8; // camera height in meters
+  const camZ = 12; // camera height in meters
+  const topZ = 40; // top of viewshed cone
 
-  // Viewshed parameters
-  const fov = 70;          // field of view in degrees
-  const range = 0.0008;    // ~80m range in degrees (approx)
-  const segments = 20;     // smoothness of the cone
+  // Viewshed parameters — large enough to see on 3D city view
+  const fov = 75;          // field of view in degrees
+  const range = 0.0015;    // ~150m range in degrees
+  const segments = 30;     // smoothness of the cone
   const headingRad = (heading * Math.PI) / 180;
   const halfFov = (fov / 2) * Math.PI / 180;
+  const cosLat = Math.cos(camLat * Math.PI / 180);
 
-  // Build the cone ground footprint as a polygon ring
-  const ring = [[camLon, camLat, camZ]];
+  // Helper: point at angle and distance
+  const farPt = (angle, dist, z) => [
+    camLon + dist * Math.sin(angle) / cosLat,
+    camLat + dist * Math.cos(angle),
+    z
+  ];
+
+  // ---- 1. Ground coverage polygon (bright fill on ground) ----
+  const groundRing = [[camLon, camLat, 1]];
   for (let i = 0; i <= segments; i++) {
     const angle = headingRad - halfFov + (i / segments) * 2 * halfFov;
-    const dist = range * (1 - 0.3 * Math.abs(i / segments - 0.5)); // slight taper
-    const px = camLon + dist * Math.sin(angle) / Math.cos(camLat * Math.PI / 180);
-    const py = camLat + dist * Math.cos(angle);
-    ring.push([px, py, 2]); // ground level
+    groundRing.push(farPt(angle, range, 1));
   }
-  ring.push([camLon, camLat, camZ]); // close ring
+  groundRing.push([camLon, camLat, 1]);
 
-  // Ground footprint (translucent fill)
-  const footprint = new Graphic({
-    geometry: new Polygon({ rings: [ring] }),
+  viewshedLayer.add(new Graphic({
+    geometry: new Polygon({ rings: [groundRing] }),
     symbol: new PolygonSymbol3D({
       symbolLayers: [new FillSymbol3DLayer({
-        material: { color: [0, 255, 65, 0.12] },
-        outline: { color: [0, 255, 65, 0.4], size: 1 }
-      })]
-    })
-  });
-  viewshedLayer.add(footprint);
-
-  // Viewshed edge lines (wireframe effect)
-  const leftAngle = headingRad - halfFov;
-  const rightAngle = headingRad + halfFov;
-  const farLeft = [
-    camLon + range * Math.sin(leftAngle) / Math.cos(camLat * Math.PI / 180),
-    camLat + range * Math.cos(leftAngle), 2
-  ];
-  const farRight = [
-    camLon + range * Math.sin(rightAngle) / Math.cos(camLat * Math.PI / 180),
-    camLat + range * Math.cos(rightAngle), 2
-  ];
-
-  // Side rays
-  for (const farPt of [farLeft, farRight]) {
-    viewshedLayer.add(new Graphic({
-      geometry: new Polyline({
-        paths: [[[camLon, camLat, camZ], farPt]]
-      }),
-      symbol: new LineSymbol3D({
-        symbolLayers: [new LineSymbol3DLayer({
-          material: { color: [0, 255, 65, 0.6] },
-          size: 1.5
-        })]
-      })
-    }));
-  }
-
-  // Arc at the far end
-  const arcPath = [];
-  for (let i = 0; i <= segments; i++) {
-    const angle = headingRad - halfFov + (i / segments) * 2 * halfFov;
-    const px = camLon + range * Math.sin(angle) / Math.cos(camLat * Math.PI / 180);
-    const py = camLat + range * Math.cos(angle);
-    arcPath.push([px, py, 2]);
-  }
-  viewshedLayer.add(new Graphic({
-    geometry: new Polyline({ paths: [arcPath] }),
-    symbol: new LineSymbol3D({
-      symbolLayers: [new LineSymbol3DLayer({
-        material: { color: [0, 255, 65, 0.4] },
-        size: 1
+        material: { color: [0, 255, 100, 0.18] },
+        outline: { color: [0, 255, 100, 0.6], size: 2 }
       })]
     })
   }));
 
-  // Vertical lines at far corners (3D effect)
-  for (const farPt of [farLeft, farRight]) {
-    viewshedLayer.add(new Graphic({
-      geometry: new Polyline({
-        paths: [[[farPt[0], farPt[1], 2], [farPt[0], farPt[1], camZ]]]
-      }),
-      symbol: new LineSymbol3D({
-        symbolLayers: [new LineSymbol3DLayer({
-          material: { color: [0, 255, 65, 0.3] },
-          size: 0.8
-        })]
-      })
-    }));
-  }
-
-  // Upper polygon (elevated viewshed plane)
-  const upperRing = [[camLon, camLat, camZ]];
+  // ---- 2. Elevated viewshed cone (3D volume) ----
+  const upperRing = [[camLon, camLat, topZ]];
   for (let i = 0; i <= segments; i++) {
     const angle = headingRad - halfFov + (i / segments) * 2 * halfFov;
-    const px = camLon + range * Math.sin(angle) / Math.cos(camLat * Math.PI / 180);
-    const py = camLat + range * Math.cos(angle);
-    upperRing.push([px, py, camZ]);
+    upperRing.push(farPt(angle, range, topZ));
   }
-  upperRing.push([camLon, camLat, camZ]);
+  upperRing.push([camLon, camLat, topZ]);
 
   viewshedLayer.add(new Graphic({
     geometry: new Polygon({ rings: [upperRing] }),
     symbol: new PolygonSymbol3D({
       symbolLayers: [new FillSymbol3DLayer({
-        material: { color: [0, 255, 65, 0.06] }
+        material: { color: [0, 255, 100, 0.08] },
+        outline: { color: [0, 255, 100, 0.35], size: 1 }
+      })]
+    })
+  }));
+
+  // ---- 3. Side edges — glowing 3D tubes from camera to far corners ----
+  const leftAngle = headingRad - halfFov;
+  const rightAngle = headingRad + halfFov;
+  const centerAngle = headingRad;
+  const edgeSymbol = new LineSymbol3D({
+    symbolLayers: [new PathSymbol3DLayer({
+      profile: "circle",
+      material: { color: [0, 255, 100, 0.7] },
+      emissive: { source: "color", strength: 2.0 },
+      width: 0.6,
+      height: 0.6,
+      cap: "round"
+    })]
+  });
+
+  // Left, right, and center rays
+  for (const angle of [leftAngle, rightAngle, centerAngle]) {
+    const far = farPt(angle, range, 1);
+    viewshedLayer.add(new Graphic({
+      geometry: new Polyline({
+        paths: [[[camLon, camLat, camZ], far]]
+      }),
+      symbol: edgeSymbol
+    }));
+    // Upper edge
+    viewshedLayer.add(new Graphic({
+      geometry: new Polyline({
+        paths: [[[camLon, camLat, topZ], farPt(angle, range, topZ)]]
+      }),
+      symbol: edgeSymbol
+    }));
+  }
+
+  // ---- 4. Vertical pillars at far corners ----
+  const pillarSymbol = new LineSymbol3D({
+    symbolLayers: [new PathSymbol3DLayer({
+      profile: "circle",
+      material: { color: [0, 255, 100, 0.4] },
+      emissive: { source: "color", strength: 1.0 },
+      width: 0.4,
+      height: 0.4,
+      cap: "round"
+    })]
+  });
+
+  for (const angle of [leftAngle, rightAngle]) {
+    const base = farPt(angle, range, 1);
+    const top = farPt(angle, range, topZ);
+    viewshedLayer.add(new Graphic({
+      geometry: new Polyline({ paths: [[base, top]] }),
+      symbol: pillarSymbol
+    }));
+  }
+
+  // ---- 5. Arc at far end (ground + upper) ----
+  const arcSymbol = new LineSymbol3D({
+    symbolLayers: [new PathSymbol3DLayer({
+      profile: "circle",
+      material: { color: [0, 255, 100, 0.5] },
+      emissive: { source: "color", strength: 1.5 },
+      width: 0.5,
+      height: 0.5,
+      cap: "round"
+    })]
+  });
+
+  for (const z of [1, topZ]) {
+    const arcPath = [];
+    for (let i = 0; i <= segments; i++) {
+      const angle = headingRad - halfFov + (i / segments) * 2 * halfFov;
+      arcPath.push(farPt(angle, range, z));
+    }
+    viewshedLayer.add(new Graphic({
+      geometry: new Polyline({ paths: [arcPath] }),
+      symbol: arcSymbol
+    }));
+  }
+
+  // ---- 6. Camera position marker (bright emissive sphere) ----
+  viewshedLayer.add(new Graphic({
+    geometry: new Point({ longitude: camLon, latitude: camLat, z: camZ }),
+    symbol: new PointSymbol3D({
+      symbolLayers: [new ObjectSymbol3DLayer({
+        resource: { primitive: "sphere" },
+        material: { color: [0, 255, 100, 1] },
+        emissive: { source: "color", strength: 4.0 },
+        width: 3,
+        height: 3,
+        depth: 3
       })]
     })
   }));
